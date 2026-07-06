@@ -1,0 +1,29 @@
+# Copyright (c) 2022-2024 HPMicro
+# SPDX-License-Identifier: BSD-3-Clause
+
+# Board configuration for custom HPM5361 board
+# Adjust the following fields according to your actual hardware
+#
+# Fields:
+#   name           - Board name, must match folder name and .cfg filename
+#   soc            - SoC name (e.g. HPM5301, HPM6750)
+#   device         - Device name for J-Link connection (e.g. HPM5301xEGx)
+#   openocd-soc    - OpenOCD SoC config filename (without .cfg)
+#   openocd-probe  - Probe type: cmsis_dap / ft232 / ft2232 / jlink / andes_aice
+#   on-board-flash - Flash configuration
+#     type         - Flash type (qspi-nor-flash, nor-flash, etc.)
+#     size         - Flash size (used in linker scripts)
+#   on-board-ram   - External RAM configuration (optional)
+#     type         - RAM type (sdram, sram, etc.)
+#     size         - RAM size
+#     width        - Bus width (e.g. 32bit)
+
+board:
+    name: HPM5361_SuperCap_board
+    soc: HPM5361
+    device: HPM5361xEGx
+    openocd-soc: hpm5300
+    openocd-probe: cmsis_dap
+    on-board-flash:
+      type: qspi-nor-flash
+      size: 1M

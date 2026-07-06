@@ -1,0 +1,35 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "make artifacts",
+      "type": "shell",
+      "command": "make",
+      "args": [
+        "artifacts",
+        "DEBUG_PATH_MODE=container"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "reset chip",
+      "type": "shell",
+      "command": "bash",
+      "args": [
+        "-c",
+        "/workspace/tools/openocd-hpm/install/bin/openocd -s /workspace/hpm_sdk/boards/openocd -f probes/cmsis_dap.cfg -f soc/hpm5300.cfg -f ${workspaceFolder}/Board/HPM5361_SuperCap_board/HPM5361_SuperCap_board.cfg -c 'adapter speed 1000' -c 'bindto 127.0.0.1' -c 'init; reset run; shutdown'"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": []
+    }
+  ]
+}

@@ -1,0 +1,93 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "HPM5361 Debug - J-Link (RTT)",
+      "type": "cortex-debug",
+      "request": "launch",
+      "servertype": "jlink",
+      "cwd": "${workspaceFolder}",
+      "executable": "${workspaceFolder}/output/HPM5361_SuperCap.elf",
+      "preLaunchTask": "make artifacts",
+      "runToEntryPoint": "main",
+      "sourceFileMap": {
+        "D:/Codes/HPM_dev/Alliance-HPM-Dev/HPM5361_SuperCap": "${workspaceFolder}",
+        "D:/Codes/HPM_dev/Alliance-HPM-Dev/hpm_sdk": "/workspace/hpm_sdk"
+      },
+      "gdbPath": "/opt/riscv32-gnu-toolchain-elf-bin/bin/riscv32-unknown-elf-gdb",
+      "toolchainPrefix": "riscv32-unknown-elf",
+      "objdumpPath": "/opt/riscv32-gnu-toolchain-elf-bin/bin/riscv32-unknown-elf-objdump",
+      "nmPath": "/opt/riscv32-gnu-toolchain-elf-bin/bin/riscv32-unknown-elf-nm",
+      "serverpath": "/workspace/tools/jlink-V8.40/install/JLinkGDBServerCLExe",
+      "device": "HPM5361xEGx",
+      "interface": "jtag",
+      "preLaunchCommands": [
+        "set confirm off",
+        "set pagination off"
+      ],
+      "rttConfig": {
+        "enabled": true,
+        "address": "auto",
+        "decoders": [
+          {
+            "label": "RTT Console",
+            "port": 0,
+            "type": "console"
+          }
+        ]
+      },
+      "liveWatch": {
+        "enabled": false
+      },
+      "showDevDebugOutput": "raw"
+    },
+    {
+      "name": "HPM5361 Debug - OpenOCD DAPLink",
+      "type": "cortex-debug",
+      "request": "launch",
+      "servertype": "openocd",
+      "cwd": "${workspaceFolder}",
+      "executable": "${workspaceFolder}/output/HPM5361_SuperCap.elf",
+      "preLaunchTask": "make artifacts",
+      "runToEntryPoint": "main",
+      "sourceFileMap": {
+        "D:/Codes/HPM_dev/Alliance-HPM-Dev/HPM5361_SuperCap": "${workspaceFolder}",
+        "D:/Codes/HPM_dev/Alliance-HPM-Dev/hpm_sdk": "/workspace/hpm_sdk"
+      },
+      "gdbPath": "/opt/riscv32-gnu-toolchain-elf-bin/bin/riscv32-unknown-elf-gdb",
+      "toolchainPrefix": "riscv32-unknown-elf",
+      "objdumpPath": "/opt/riscv32-gnu-toolchain-elf-bin/bin/riscv32-unknown-elf-objdump",
+      "nmPath": "/opt/riscv32-gnu-toolchain-elf-bin/bin/riscv32-unknown-elf-nm",
+      "serverpath": "/workspace/tools/openocd-hpm/install/bin/openocd",
+      "searchDir": [
+        "/workspace/hpm_sdk/boards/openocd"
+      ],
+      "configFiles": [
+        "probes/cmsis_dap.cfg",
+        "soc/hpm5300.cfg",
+        "${workspaceFolder}/Board/HPM5361_SuperCap_board/HPM5361_SuperCap_board.cfg"
+      ],
+      "serverArgs": [
+        "-c",
+        "bindto 127.0.0.1",
+        "-c",
+        "adapter speed 4000",
+        "-c",
+        "riscv set_command_timeout_sec 60",
+        "-c",
+        "reset_config srst_only srst_nogate connect_deassert_srst"
+      ],
+      "preLaunchCommands": [
+        "set confirm off",
+        "set pagination off"
+      ],
+      "rttConfig": {
+        "enabled": false
+      },
+      "liveWatch": {
+        "enabled": false
+      },
+      "showDevDebugOutput": "raw"
+    }
+  ]
+}

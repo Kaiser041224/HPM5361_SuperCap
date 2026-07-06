@@ -1,0 +1,8 @@
+{
+  "recommendations": [
+    "llvm-vs-code-extensions.vscode-clangd",
+    "marus25.cortex-debug",
+    "streetsidesoftware.code-spell-checker",
+    "streetsidesoftware.code-spell-checker-chinese"
+  ]
+}

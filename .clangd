@@ -1,0 +1,27 @@
+---
+CompileFlags:
+  CompilationDatabase: build
+  Add:
+    - -I../Interface
+    - -I../Board/HPM5361_SuperCap_board
+    - -ferror-limit=0
+  Remove:
+    - -fno-shrink-wrap
+    - -fstrict-volatile-bitfields
+    - -fno-tree-switch-conversion
+    - -mabi=ilp32d
+    - -march=rv32imafdc
+
+Diagnostics:
+  UnusedIncludes: None
+  MissingIncludes: None
+  Suppress:
+    - missing-includes
+    - pp_file_not_found
+    - drv_unknown_argument
+
+Index:
+  Background: Build
+
+Hover:
+  ShowAKA: true

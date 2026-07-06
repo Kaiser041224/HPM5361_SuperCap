@@ -1,0 +1,44 @@
+{
+  "folders": [
+    {
+      "name": "hpm_sdk",
+      "path": "../hpm_sdk"
+    },
+    {
+      "name": "alliance_hpm_base_platform",
+      "path": "../alliance_hpm_base_platform"
+    },
+    {
+      "name": "HPM5361_SuperCap",
+      "path": "."
+    }
+  ],
+  "settings": {
+    "clangd.path": "clangd",
+    "clangd.arguments": [
+      "--log=error",
+      "--background-index",
+      "--header-insertion=never"
+    ],
+    "C_Cpp.intelliSenseEngine": "disabled",
+    "cmake.configureOnOpen": false,
+    "files.exclude": {
+      "**/.git": true,
+      "**/.cache": true
+    },
+    "search.exclude": {
+      "**/.cache": true,
+      "**/.venv": true
+    },
+    "files.watcherExclude": {
+      "**/.cache/**": true,
+      "**/.venv/**": true
+    },
+    "cSpell.enabled": true,
+    "cSpell.language": "en,zh-CN",
+    "cSpell.useGitignore": true,
+    "cSpell.maxNumberOfProblems": 2000,
+    "editor.formatOnSave": true,
+    "terminal.integrated.cwd": "."
+  }
+}
