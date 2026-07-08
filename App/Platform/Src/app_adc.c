@@ -3,7 +3,8 @@
  *
  * Current hardware mapping:
  *   ADC0: PB14 / ADC0.6 = IL
- *   ADC1: PB11 / ADC1.3 = VCAP(control VLINK), PB12 / ADC1.4 = VOUT(control VIN),
+ *   ADC1: PB11 / ADC1.3 = VOUT
+ *         PB12 / ADC1.4 = VCAP
  *         PB13 / ADC1.5 = IIN
  *
  * Copyright (c) 2026 HPMicro
@@ -31,8 +32,8 @@ typedef struct {
 } app_adc_map_t;
 
 static const app_adc_map_t adc_map[ADC_CH_COUNT] = {
-    [ADC_CH_VCAP] = {.inst = APP_ADC_INST_1, .hw_ch = 3}, /* VCAP == control VLINK */
-    [ADC_CH_VOUT] = {.inst = APP_ADC_INST_1, .hw_ch = 4}, /* VOUT == control VIN */
+    [ADC_CH_VCAP] = {.inst = APP_ADC_INST_1, .hw_ch = 4},
+    [ADC_CH_VOUT] = {.inst = APP_ADC_INST_1, .hw_ch = 3},
     [ADC_CH_I_IN] = {.inst = APP_ADC_INST_1, .hw_ch = 5},
     [ADC_CH_I_L]  = {.inst = APP_ADC_INST_0, .hw_ch = 6},
 };
@@ -152,9 +153,9 @@ static void app_adc_pmt_cb_adc1(
 
     static const adc_channel_t slot_to_logic[4] = {
         [0] = ADC_CH_COUNT,
-        [1] = ADC_CH_VCAP,
+        [1] = ADC_CH_I_IN,
         [2] = ADC_CH_VOUT,
-        [3] = ADC_CH_I_IN,
+        [3] = ADC_CH_VCAP,
     };
 
     for (uint8_t i = 1; i < count && i < 4U; i++) {
@@ -208,7 +209,7 @@ void app_adc_init(void)
         (void)intf_adc_init(INTF_ADC_CH(APP_ADC_INST_0, 0), &cfg);
     }
 
-    /* ADC1 PMT: dummy + VCAP(VLINK)/VOUT(VIN)/IIN, triggered by PWM1 CMP11 at carrier zero. */
+    /* ADC1 PMT: dummy + IIN/VOUT/VCAP, triggered by PWM1 CMP11 at carrier center. */
     {
         memset(pmt_dma1, 0, sizeof(pmt_dma1));
         intf_adc_cfg_t cfg = {
@@ -226,9 +227,9 @@ void app_adc_init(void)
             .pmt_cb_user_data = NULL,
         };
         cfg.pmt_ch_list[0] = 15U;
-        cfg.pmt_ch_list[1] = 3U;
-        cfg.pmt_ch_list[2] = 4U;
-        cfg.pmt_ch_list[3] = 5U;
+        cfg.pmt_ch_list[1] = 5U;
+        cfg.pmt_ch_list[2] = 3U;
+        cfg.pmt_ch_list[3] = 4U;
         (void)intf_adc_init(INTF_ADC_CH(APP_ADC_INST_1, 0), &cfg);
     }
 

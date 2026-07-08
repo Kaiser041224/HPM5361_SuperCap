@@ -3,7 +3,7 @@
  *
  * 控制链:
  *   PI 输出 → V_L_cmd (V，有符号平均电感电压命令)
- *   VIN/VLINK 前馈: V_L_cmd → generalized_duty (0.0-1.0)
+ *   VOUT/VCAP 前馈: V_L_cmd → generalized_duty (0.0-1.0)
  *   单输入调制器: generalized_duty → DA, DB
  *
  * 调制器公式:
@@ -11,15 +11,16 @@
  *   DB = Dmax × (1 - generalized_duty)
  *
  * 理想平均电感电压:
- *   V_L = DA × VIN - DB × VLINK
- *       = Dmax × ((VIN + VLINK) × generalized_duty - VLINK)
+ *   V_L = DA × VOUT - DB × VCAP
+ *       = Dmax × ((VOUT + VCAP) × generalized_duty - VCAP)
  *
  * 双向功率: V_L_cmd 符号由 PI 自然决定，前馈负责转换为 generalized_duty。
  * A/B 半桥独立控制，无移相。
  *
- * SuperCap App voltage mapping:
- *   control-model VIN   <- current project VOUT
- *   control-model VLINK <- current project VCAP
+ * 物理量约定:
+ *   VOUT: 超级电容控制器输出电压，和系统 VIN 仅通过 IIN 检流电阻相连。
+ *   VCAP: 超级电容电容组电压，位于 Buck-Boost cap 侧。
+ *   VIN:  系统总输入电压，当前硬件未采样，不参与本控制器前馈计算。
  *
  * Copyright (c) 2026 Alliance HardWare Team
  * SPDX-License-Identifier: BSD-3-Clause
@@ -74,7 +75,7 @@ typedef struct {
 
     float v_out_target_v;
     float i_l_target_a;
-    float i_link_target_a;
+    float i_cap_target_a;
     float p_target_w;
     float p_in_w;
 
@@ -90,7 +91,7 @@ typedef struct {
 
     float v_cmd;
     float generalized_duty;
-    bool vlink_limit_active;
+    bool vcap_limit_active;
     float duty_a;
     float duty_b;
 } ctrl_buckboost_state_t;
@@ -111,28 +112,29 @@ void ctrl_buckboost_emergency_stop(ctrl_buckboost_t* ctrl);
  *   DA = Dmax × generalized_duty
  *   DB = Dmax × (1 - generalized_duty)
  *
- * VIN/VLINK 前馈不在调制器内完成，而是在 update_current() 中完成。
+ * VOUT/VCAP 前馈不在调制器内完成，而是在 update_current() 中完成。
  */
 void ctrl_buckboost_modulate(ctrl_buckboost_t* ctrl, float generalized_duty);
 
 /*
  * 电流内环 update (200kHz)
  *   PI(current_ref, i_l) → V_L_cmd (V)
- *   feedforward(V_L_cmd, VIN, VLINK) → generalized_duty
+ *   feedforward(V_L_cmd, VOUT, VCAP) → generalized_duty
  *   modulate(generalized_duty) → DA, DB
  *
- * In the current SuperCap App, pass VOUT as v_in and VCAP as vlink.
+ * VOUT 与 VCAP 分别是四开关 Buck-Boost 两侧的实测电压。
  */
-void ctrl_buckboost_update_current(ctrl_buckboost_t* ctrl, float i_l, float v_in, float vlink);
+void ctrl_buckboost_update_current(ctrl_buckboost_t* ctrl, float i_l, float vout, float vcap);
 
 /*
- * 电压外环 update (50kHz)
- *   PI(v_out_target, vlink) + i_load_ff × ff_gain → current_ref
+ * 电压/限流竞争外环 update (50kHz)
+ *   PI(v_out_target, vout) + i_cap_ff × ff_gain → current_ref
+ *   PI(i_cap_target, i_cap_est) 与电压环竞争，限制 cap 侧充电/放电电流。
  *
- * vlink is the current SuperCap VCAP node.
+ * 电压反馈使用 VOUT；cap 侧电流当前由 I_L 和占空比估算。
  */
 void ctrl_buckboost_update_voltage(
-    ctrl_buckboost_t* ctrl, float vlink, float i_load_ff, float i_link);
+    ctrl_buckboost_t* ctrl, float vout, float i_cap_ff, float i_cap_est);
 
 /*
  * 进入恒压 (CV) 模式，配置软起动
@@ -151,13 +153,13 @@ void ctrl_buckboost_enter_cw_mode(ctrl_buckboost_t* ctrl, float target_w);
 /*
  * 功率外环 update (25kHz)
  *   增量式 PI(p_target, p_in) → power_pid_out
- *   双向: PID 输出作为 signed v_out_target_v，再由电压环产生 signed current_ref
+ *   双向: PID 输出作为 signed VOUT target，再由电压环产生 signed current_ref
  */
 void ctrl_buckboost_update_power(ctrl_buckboost_t* ctrl, float p_in);
 
 void ctrl_buckboost_set_vout_target(ctrl_buckboost_t* ctrl, float target_v);
 void ctrl_buckboost_set_il_target(ctrl_buckboost_t* ctrl, float target_a);
-void ctrl_buckboost_set_ilink_target(ctrl_buckboost_t* ctrl, float target_a);
+void ctrl_buckboost_set_icap_target(ctrl_buckboost_t* ctrl, float target_a);
 void ctrl_buckboost_set_ptarget(ctrl_buckboost_t* ctrl, float target_w);
 void ctrl_buckboost_set_target_type(ctrl_buckboost_t* ctrl, ctrl_buckboost_target_t target);
 void ctrl_buckboost_set_params(ctrl_buckboost_t* ctrl, const ctrl_buckboost_params_t* params);

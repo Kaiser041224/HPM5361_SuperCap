@@ -18,15 +18,12 @@ extern "C" {
 #endif
 
 typedef enum {
-    APP_ANALOG_SIGNAL_ITEM_VCAP = 0, /* SuperCap VCAP, control-model VLINK */
-    APP_ANALOG_SIGNAL_ITEM_VOUT,     /* Three-port VOUT, control-model VIN */
+    APP_ANALOG_SIGNAL_ITEM_VCAP = 0, /* 超级电容电容组电压 */
+    APP_ANALOG_SIGNAL_ITEM_VOUT,     /* 超级电容控制器输出电压 */
     APP_ANALOG_SIGNAL_ITEM_I_IN,
     APP_ANALOG_SIGNAL_ITEM_I_L,
     APP_ANALOG_SIGNAL_ITEM_COUNT,
 } app_analog_signal_item_t;
-
-#define APP_ANALOG_SIGNAL_ITEM_VLINK APP_ANALOG_SIGNAL_ITEM_VCAP
-#define APP_ANALOG_SIGNAL_ITEM_VIN   APP_ANALOG_SIGNAL_ITEM_VOUT
 
 /* 内部符号声明，仅供 inline 函数访问，不作为公共 API */
 extern algo_lpf_t s_lpf_filters[];

@@ -19,13 +19,12 @@ extern "C" {
 
 typedef enum {
     FAULT_NONE          = 0,
-    /* VIN/VLINK use the control-model names: VIN = current VOUT, VLINK = current VCAP. */
-    FAULT_OV_VIN        = (1 << 0),
-    FAULT_UV_VIN        = (1 << 1),
+    FAULT_OV_VOUT       = (1 << 0),
+    FAULT_UV_VOUT       = (1 << 1),
     FAULT_OC_IIN        = (1 << 2),
     FAULT_OC_IL         = (1 << 3),
-    FAULT_OV_VLINK      = (1 << 4),
-    FAULT_UV_VLINK      = (1 << 5),
+    FAULT_OV_VCAP       = (1 << 4),
+    FAULT_UV_VCAP       = (1 << 5),
     FAULT_OC_ICOIL      = (1 << 6),
     FAULT_OC_ILF        = (1 << 7),
     FAULT_OT            = (1 << 8),
@@ -38,12 +37,12 @@ typedef enum {
 } fault_code_t;
 
 typedef struct {
-    float v_in_ov_mv;
-    float v_in_uv_mv;
+    float v_out_ov_mv;
+    float v_out_uv_mv;
     float i_in_oc_ma;
     float i_l_oc_ma;
-    float v_link_ov_mv;
-    float v_link_uv_mv;
+    float v_cap_ov_mv;
+    float v_cap_uv_mv;
     float i_coil_oc_ma;
     float i_lf_oc_ma;
     float temp_ot_c;

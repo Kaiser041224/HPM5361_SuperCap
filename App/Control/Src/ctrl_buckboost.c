@@ -3,7 +3,7 @@
  *
  * 控制链:
  *   PI(current_ref, i_l) → V_L_cmd (有符号平均电感电压命令)
- *   VIN/VLINK 前馈 → generalized_duty (0.0-1.0)
+ *   VOUT/VCAP 前馈 → generalized_duty (0.0-1.0)
  *   单输入调制器 generalized_duty → DA, DB
  *
  * 调制器:
@@ -11,11 +11,12 @@
  *   DB = Dmax × (1 - generalized_duty)
  *
  * 理想平均电感电压:
- *   V_L = DA × VIN - DB × VLINK
+ *   V_L = DA × VOUT - DB × VCAP
  *
- * SuperCap App voltage mapping:
- *   control-model VIN   <- current project VOUT
- *   control-model VLINK <- current project VCAP
+ * 物理量约定:
+ *   VOUT: 超级电容控制器输出电压，和系统 VIN 仅通过 IIN 检流电阻相连。
+ *   VCAP: 超级电容电容组电压，位于 Buck-Boost cap 侧。
+ *   VIN:  系统总输入电压，当前硬件未采样。
  *
  * Copyright (c) 2026 Alliance HardWare Team
  * SPDX-License-Identifier: BSD-3-Clause
@@ -35,16 +36,16 @@
 #define BUCKBOOST_DUTY_MAX_DEFAULT 0.95f
 
 /* 控制保护默认值 */
-#define BUCKBOOST_I_L_LIMIT_DEFAULT       16.0f
-#define BUCKBOOST_V_OUT_LIMIT_DEFAULT     32.0f
-#define BUCKBOOST_V_OUT_TARGET_DEFAULT    12.0f
-#define BUCKBOOST_I_LINK_TARGET_DEFAULT   27.0f
-#define BUCKBOOST_BUS_SUM_MIN_V           1.0f
-#define BUCKBOOST_VLINK_LIMIT_ENTER_RATIO 1.00f
-#define BUCKBOOST_VLINK_LIMIT_EXIT_RATIO  0.96f
+#define BUCKBOOST_I_L_LIMIT_DEFAULT      32.0f
+#define BUCKBOOST_V_OUT_LIMIT_DEFAULT    32.0f
+#define BUCKBOOST_V_OUT_TARGET_DEFAULT   24.0f
+#define BUCKBOOST_I_CAP_TARGET_DEFAULT   27.0f
+#define BUCKBOOST_BUS_SUM_MIN_V          1.0f
+#define BUCKBOOST_VCAP_LIMIT_ENTER_RATIO 1.00f
+#define BUCKBOOST_VCAP_LIMIT_EXIT_RATIO  0.96f
 
 /* 功率环 PID 输出范围 */
-#define BUCKBOOST_POWER_PID_OUT_MAX 32.0f
+#define BUCKBOOST_POWER_PID_OUT_MAX 27.0f
 #define BUCKBOOST_POWER_PID_OUT_MIN (-BUCKBOOST_POWER_PID_OUT_MAX)
 /* 电流环 PID 输出为有符号平均电感电压命令 V_L_cmd */
 #define BUCKBOOST_CURRENT_PID_OUT_MIN (-32.0f)
@@ -78,8 +79,8 @@ typedef struct {
 
 typedef struct {
     buckboost_mod_ctx_t mod;
-    float vin;
-    float vlk;
+    float vout;
+    float vcap;
     float inv_bus_sum;
 } buckboost_current_ctx_t;
 
@@ -121,8 +122,7 @@ static bool buckboost_prepare_mod_ctx(float d_min, float d_max, buckboost_mod_ct
 
 ATTR_RAMFUNC
 static bool buckboost_prepare_current_ctx(
-    const ctrl_buckboost_t* ctrl, float i_l, float v_in, float vlink,
-    buckboost_current_ctx_t* ctx) {
+    const ctrl_buckboost_t* ctrl, float i_l, float vout, float vcap, buckboost_current_ctx_t* ctx) {
     if (ctrl == NULL || ctx == NULL) {
         return false;
     }
@@ -133,13 +133,13 @@ static bool buckboost_prepare_current_ctx(
         return false;
     }
 
-    float vin = absf_fast(v_in);
-    float vlk = absf_fast(vlink);
-    if (!algo_pid_finite(vin) || !algo_pid_finite(vlk)) {
+    float vout_abs = absf_fast(vout);
+    float vcap_abs = absf_fast(vcap);
+    if (!algo_pid_finite(vout_abs) || !algo_pid_finite(vcap_abs)) {
         return false;
     }
 
-    float bus_sum = vin + vlk;
+    float bus_sum = vout_abs + vcap_abs;
     if (!algo_pid_finite(bus_sum) || bus_sum <= BUCKBOOST_BUS_SUM_MIN_V) {
         return false;
     }
@@ -149,8 +149,8 @@ static bool buckboost_prepare_current_ctx(
         return false;
     }
 
-    ctx->vin = vin;
-    ctx->vlk = vlk;
+    ctx->vout = vout_abs;
+    ctx->vcap = vcap_abs;
     ctx->inv_bus_sum = inv_bus_sum;
     return true;
 }
@@ -191,10 +191,10 @@ static bool buckboost_modulate_generalized(
 }
 
 /* ============================================================================
- * VIN/VLINK 前馈: V_L_cmd → generalized_duty
+ * VOUT/VCAP 前馈: V_L_cmd → generalized_duty
  *
- * V_L = Dmax × ((VIN + VLINK) × g - VLINK)
- * g   = (V_L / Dmax + VLINK) / (VIN + VLINK)
+ * V_L = Dmax × ((VOUT + VCAP) × g - VCAP)
+ * g   = (V_L / Dmax + VCAP) / (VOUT + VCAP)
  * ============================================================================ */
 
 ATTR_RAMFUNC
@@ -215,7 +215,7 @@ static bool buckboost_vl_cmd_to_generalized_duty(
         return false;
     }
 
-    float numerator = v_l_per_duty + ctx->vlk;
+    float numerator = v_l_per_duty + ctx->vcap;
     if (!algo_pid_finite(numerator)) {
         *out_generalized_duty = 0.0f;
         return false;
@@ -232,44 +232,44 @@ static bool buckboost_vl_cmd_to_generalized_duty(
 }
 
 /* ============================================================================
- * VLINK 动态限幅: 仅在过压区启用，低压区释放以保持最大调制性能
+ * VCAP 动态限幅: 仅在 cap 侧过压区启用，低压区释放以保持最大调制性能
  *
- * 进入: |VLINK| >= limit
- * 退出: |VLINK| <= limit * BUCKBOOST_VLINK_LIMIT_EXIT_RATIO
+ * 进入: |VCAP| >= limit
+ * 退出: |VCAP| <= limit * BUCKBOOST_VCAP_LIMIT_EXIT_RATIO
  *
  * 正向过压时，最大允许 g 按目标最高输出电压反推:
- *   g_limit = V_LIMIT / (VIN + V_LIMIT)
- * 这样 VLINK > V_LIMIT 时会产生抑制继续升压的调制边界。
+ *   g_limit = V_LIMIT / (VOUT + V_LIMIT)
+ * 这样 VCAP > V_LIMIT 时会产生抑制继续升压的调制边界。
  * ============================================================================ */
 
 ATTR_RAMFUNC
-static bool buckboost_update_vlink_limit_state(
-    ctrl_buckboost_t* ctrl, float vlink_abs, float voltage_limit) {
-    if (ctrl == NULL || !algo_pid_finite(vlink_abs) || !algo_pid_finite(voltage_limit)
+static bool
+    buckboost_update_vcap_limit_state(ctrl_buckboost_t* ctrl, float vcap_abs, float voltage_limit) {
+    if (ctrl == NULL || !algo_pid_finite(vcap_abs) || !algo_pid_finite(voltage_limit)
         || voltage_limit <= 0.0f) {
         return false;
     }
 
-    float enter = voltage_limit * BUCKBOOST_VLINK_LIMIT_ENTER_RATIO;
-    float exit = voltage_limit * BUCKBOOST_VLINK_LIMIT_EXIT_RATIO;
+    float enter = voltage_limit * BUCKBOOST_VCAP_LIMIT_ENTER_RATIO;
+    float exit = voltage_limit * BUCKBOOST_VCAP_LIMIT_EXIT_RATIO;
     if (!algo_pid_finite(enter) || !algo_pid_finite(exit) || exit < 0.0f || exit > enter) {
         return false;
     }
 
-    if (ctrl->state.vlink_limit_active) {
-        if (vlink_abs <= exit) {
-            ctrl->state.vlink_limit_active = false;
+    if (ctrl->state.vcap_limit_active) {
+        if (vcap_abs <= exit) {
+            ctrl->state.vcap_limit_active = false;
         }
-    } else if (vlink_abs >= enter) {
-        ctrl->state.vlink_limit_active = true;
+    } else if (vcap_abs >= enter) {
+        ctrl->state.vcap_limit_active = true;
     }
 
     return true;
 }
 
 ATTR_RAMFUNC
-static bool buckboost_limit_generalized_duty_by_vlink(
-    ctrl_buckboost_t* ctrl, float vlink, float voltage_limit, const buckboost_current_ctx_t* ctx,
+static bool buckboost_limit_generalized_duty_by_vcap(
+    ctrl_buckboost_t* ctrl, float vcap, float voltage_limit, const buckboost_current_ctx_t* ctx,
     float* io_generalized_duty) {
     if (ctrl == NULL || ctx == NULL || io_generalized_duty == NULL
         || !algo_pid_finite(*io_generalized_duty)) {
@@ -277,18 +277,18 @@ static bool buckboost_limit_generalized_duty_by_vlink(
     }
 
     float limit = absf_fast(voltage_limit);
-    float vlink_abs = absf_fast(vlink);
-    if (!algo_pid_finite(limit) || limit <= 0.0f || !algo_pid_finite(vlink_abs)) {
+    float vcap_abs = absf_fast(vcap);
+    if (!algo_pid_finite(limit) || limit <= 0.0f || !algo_pid_finite(vcap_abs)) {
         return false;
     }
-    if (!buckboost_update_vlink_limit_state(ctrl, vlink_abs, limit)) {
+    if (!buckboost_update_vcap_limit_state(ctrl, vcap_abs, limit)) {
         return false;
     }
-    if (!ctrl->state.vlink_limit_active) {
+    if (!ctrl->state.vcap_limit_active) {
         return true;
     }
 
-    float limit_sum = ctx->vin + limit;
+    float limit_sum = ctx->vout + limit;
     if (!algo_pid_finite(limit_sum) || limit_sum <= BUCKBOOST_BUS_SUM_MIN_V) {
         return false;
     }
@@ -299,7 +299,7 @@ static bool buckboost_limit_generalized_duty_by_vlink(
     }
     dynamic_g = clampf(dynamic_g, ctx->mod.g_min, ctx->mod.g_max);
 
-    if (vlink >= 0.0f) {
+    if (vcap >= 0.0f) {
         if (*io_generalized_duty > dynamic_g) {
             *io_generalized_duty = dynamic_g;
         }
@@ -317,7 +317,7 @@ static void buckboost_set_safe_output(ctrl_buckboost_t* ctrl) {
     }
     ctrl->state.v_cmd = 0.0f;
     ctrl->state.generalized_duty = 0.0f;
-    ctrl->state.vlink_limit_active = false;
+    ctrl->state.vcap_limit_active = false;
     ctrl->state.duty_a = 0.0f;
     ctrl->state.duty_b = 0.0f;
 }
@@ -341,8 +341,8 @@ int ctrl_buckboost_init(ctrl_buckboost_t* ctrl) {
 
     algo_pid_cfg_t inductor_current_pid_cfg = {
         .mode = ALGO_PID_MODE_INCREMENTAL,
-        .kp = 0.0125f,
-        .ki = 50.0f,
+        .kp = 0.125f,
+        .ki = 325.0f,
         .kd = 0.0f,
         .sample_time_s = 1.0f / 100000.0f,
         .out_min = BUCKBOOST_CURRENT_PID_OUT_MIN,
@@ -431,7 +431,7 @@ int ctrl_buckboost_init(ctrl_buckboost_t* ctrl) {
     };
 
     ctrl->state.v_out_target_v = BUCKBOOST_V_OUT_TARGET_DEFAULT;
-    ctrl->state.i_link_target_a = BUCKBOOST_I_LINK_TARGET_DEFAULT;
+    ctrl->state.i_cap_target_a = BUCKBOOST_I_CAP_TARGET_DEFAULT;
     ctrl->state.p_target_w = BUCKBOOST_P_TARGET_DEFAULT;
     ctrl->params.p_target_w = BUCKBOOST_P_TARGET_DEFAULT;
 
@@ -444,7 +444,7 @@ int ctrl_buckboost_enable(ctrl_buckboost_t* ctrl) {
     ctrl->state.enabled = true;
     ctrl->state.v_cmd = 0.0f;
     ctrl->state.generalized_duty = 0.0f;
-    ctrl->state.vlink_limit_active = false;
+    ctrl->state.vcap_limit_active = false;
     ctrl->state.duty_a = 0.0f;
     ctrl->state.duty_b = 0.0f;
     ctrl->state.current_ref = 0.0f;
@@ -468,7 +468,7 @@ void ctrl_buckboost_disable(ctrl_buckboost_t* ctrl) {
     ctrl->state.enabled = false;
     ctrl->state.v_cmd = 0.0f;
     ctrl->state.generalized_duty = 0.0f;
-    ctrl->state.vlink_limit_active = false;
+    ctrl->state.vcap_limit_active = false;
     ctrl->state.duty_a = 0.0f;
     ctrl->state.duty_b = 0.0f;
     ctrl->state.voltage_pid_out = 0.0f;
@@ -481,7 +481,7 @@ void ctrl_buckboost_emergency_stop(ctrl_buckboost_t* ctrl) {
     ctrl->state.enabled = false;
     ctrl->state.v_cmd = 0.0f;
     ctrl->state.generalized_duty = 0.0f;
-    ctrl->state.vlink_limit_active = false;
+    ctrl->state.vcap_limit_active = false;
     ctrl->state.duty_a = 0.0f;
     ctrl->state.duty_b = 0.0f;
     ctrl->state.current_ref = 0.0f;
@@ -529,18 +529,18 @@ void ctrl_buckboost_modulate(ctrl_buckboost_t* ctrl, float generalized_duty) {
  * 电流内环 update (200kHz)
  *
  * PI(current_ref, i_l) → V_L_cmd (V)
- * VIN/VLINK feedforward → generalized_duty
+ * VOUT/VCAP feedforward → generalized_duty
  * modulate(generalized_duty) → DA, DB
  * ============================================================================ */
 
 ATTR_RAMFUNC
-void ctrl_buckboost_update_current(ctrl_buckboost_t* ctrl, float i_l, float v_in, float vlink) {
+void ctrl_buckboost_update_current(ctrl_buckboost_t* ctrl, float i_l, float vout, float vcap) {
     if (ctrl == NULL || !ctrl->state.enabled) {
         return;
     }
 
     buckboost_current_ctx_t ctx;
-    if (!buckboost_prepare_current_ctx(ctrl, i_l, v_in, vlink, &ctx)) {
+    if (!buckboost_prepare_current_ctx(ctrl, i_l, vout, vcap, &ctx)) {
         buckboost_set_safe_output(ctrl);
         return;
     }
@@ -560,14 +560,14 @@ void ctrl_buckboost_update_current(ctrl_buckboost_t* ctrl, float i_l, float v_in
     }
     v_l_cmd = clampf(v_l_cmd, -voltage_limit, voltage_limit);
 
-    /* 2. 前馈: V_L_cmd + VIN/VLINK → generalized_duty，并按 VLINK 双向限幅 */
+    /* 2. 前馈: V_L_cmd + VOUT/VCAP → generalized_duty，并按 VCAP 双向限幅 */
     float generalized_duty = 0.0f;
     if (!buckboost_vl_cmd_to_generalized_duty(v_l_cmd, &ctx, &generalized_duty)) {
         buckboost_set_safe_output(ctrl);
         return;
     }
-    if (!buckboost_limit_generalized_duty_by_vlink(
-            ctrl, vlink, voltage_limit, &ctx, &generalized_duty)) {
+    if (!buckboost_limit_generalized_duty_by_vcap(
+            ctrl, vcap, voltage_limit, &ctx, &generalized_duty)) {
         buckboost_set_safe_output(ctrl);
         return;
     }
@@ -589,16 +589,16 @@ void ctrl_buckboost_update_current(ctrl_buckboost_t* ctrl, float i_l, float v_in
 }
 
 /* ============================================================================
- * 电压外环 + 输出电流环 update (50kHz)
+ * VOUT 电压外环 + cap 侧估算电流限流环 update (50kHz)
  * ============================================================================ */
 
 ATTR_RAMFUNC
 void ctrl_buckboost_update_voltage(
-    ctrl_buckboost_t* ctrl, float vlink, float i_load_ff, float i_link) {
+    ctrl_buckboost_t* ctrl, float vout, float i_cap_ff, float i_cap_est) {
     if (ctrl == NULL || !ctrl->state.enabled) {
         return;
     }
-    if (!algo_pid_finite(vlink) || !algo_pid_finite(ctrl->state.v_out_target_v)) {
+    if (!algo_pid_finite(vout) || !algo_pid_finite(ctrl->state.v_out_target_v)) {
         return;
     }
 
@@ -608,25 +608,25 @@ void ctrl_buckboost_update_voltage(
 
     /* CV: PI + 前馈 */
     float i_ref_cv =
-        ctrl->state.voltage_pid.step(&ctrl->state.voltage_pid, ctrl->state.v_out_target_v, vlink)
-        + i_load_ff * ctrl->params.voltage_ff_gain;
+        ctrl->state.voltage_pid.step(&ctrl->state.voltage_pid, ctrl->state.v_out_target_v, vout)
+        + i_cap_ff * ctrl->params.voltage_ff_gain;
     if (!algo_pid_finite(i_ref_cv))
         i_ref_cv = 0.0f;
     i_ref_cv = clampf(i_ref_cv, -i_limit, i_limit);
     ctrl->state.voltage_pid_out = i_ref_cv;
 
-    /* CC: PI(i_link_target, i_link) */
-    float i_link_target = ctrl->state.i_link_target_a;
+    /* CC: PI(i_cap_target, i_cap_est) */
+    float i_cap_target = ctrl->state.i_cap_target_a;
     float i_ref_cc =
-        ctrl->state.current_cc_pid.step(&ctrl->state.current_cc_pid, i_link_target, i_link);
+        ctrl->state.current_cc_pid.step(&ctrl->state.current_cc_pid, i_cap_target, i_cap_est);
     if (!algo_pid_finite(i_ref_cc))
         i_ref_cc = 0.0f;
     i_ref_cc = clampf(i_ref_cc, -i_limit, i_limit);
     ctrl->state.cc_pid_out = i_ref_cc;
 
     /* CV/CC 竞争: 取更保守的值 */
-    float i_ref_cmd = (i_link_target >= 0.0f) ? ((i_ref_cv < i_ref_cc) ? i_ref_cv : i_ref_cc)
-                                              : ((i_ref_cv > i_ref_cc) ? i_ref_cv : i_ref_cc);
+    float i_ref_cmd = (i_cap_target >= 0.0f) ? ((i_ref_cv < i_ref_cc) ? i_ref_cv : i_ref_cc)
+                                             : ((i_ref_cv > i_ref_cc) ? i_ref_cv : i_ref_cc);
 
     if (ctrl->state.target_type == BUCKBOOST_TARGET_CV
         || ctrl->state.target_type == BUCKBOOST_TARGET_CW) {
@@ -636,7 +636,7 @@ void ctrl_buckboost_update_voltage(
 }
 
 /* ============================================================================
- * 功率外环 update (25kHz)
+ * CW 功率外环 update (25kHz): p_in = VOUT × IIN
  * ============================================================================ */
 
 ATTR_RAMFUNC
@@ -651,22 +651,23 @@ void ctrl_buckboost_update_power(ctrl_buckboost_t* ctrl, float p_in) {
         return;
     }
 
-    float p_out = ctrl->state.power_pid.step(&ctrl->state.power_pid, ctrl->state.p_target_w, p_in);
-    if (!algo_pid_finite(p_out)) {
-        p_out = 0.0f;
+    float vout_target_cmd =
+        ctrl->state.power_pid.step(&ctrl->state.power_pid, ctrl->state.p_target_w, p_in);
+    if (!algo_pid_finite(vout_target_cmd)) {
+        vout_target_cmd = 0.0f;
     }
 
     float v_limit = ctrl->params.v_out_limit_v;
     if (!algo_pid_finite(v_limit) || v_limit <= 0.0f) {
         v_limit = BUCKBOOST_POWER_PID_OUT_MAX;
     }
-    p_out = clampf(p_out, -v_limit, v_limit);
+    vout_target_cmd = clampf(vout_target_cmd, -v_limit, v_limit);
 
-    ctrl->state.power_pid_out = p_out;
+    ctrl->state.power_pid_out = vout_target_cmd;
 
     /* CW 模式级联: 功率环输出 → signed v_out_target_v → 电压环 → signed current_ref */
     if (ctrl->state.target_type == BUCKBOOST_TARGET_CW) {
-        ctrl->state.v_out_target_v = p_out;
+        ctrl->state.v_out_target_v = vout_target_cmd;
     }
 }
 
@@ -696,11 +697,11 @@ void ctrl_buckboost_enter_cw_mode(ctrl_buckboost_t* ctrl, float target_w) {
     ctrl->state.p_target_w = target_w;
     ctrl->params.p_target_w = target_w;
     ctrl->state.target_type = BUCKBOOST_TARGET_CW;
-    float i_link_limit = absf_fast(ctrl->state.i_link_target_a);
-    if (!algo_pid_finite(i_link_limit) || i_link_limit <= 0.0f) {
-        i_link_limit = BUCKBOOST_I_LINK_TARGET_DEFAULT;
+    float i_cap_limit = absf_fast(ctrl->state.i_cap_target_a);
+    if (!algo_pid_finite(i_cap_limit) || i_cap_limit <= 0.0f) {
+        i_cap_limit = BUCKBOOST_I_CAP_TARGET_DEFAULT;
     }
-    ctrl->state.i_link_target_a = (target_w < 0.0f) ? -i_link_limit : i_link_limit;
+    ctrl->state.i_cap_target_a = (target_w < 0.0f) ? -i_cap_limit : i_cap_limit;
 }
 
 void ctrl_buckboost_set_il_target(ctrl_buckboost_t* ctrl, float target_a) {
@@ -725,10 +726,10 @@ void ctrl_buckboost_set_il_target(ctrl_buckboost_t* ctrl, float target_a) {
     ctrl->state.i_l_target_a = target_a;
 }
 
-void ctrl_buckboost_set_ilink_target(ctrl_buckboost_t* ctrl, float target_a) {
+void ctrl_buckboost_set_icap_target(ctrl_buckboost_t* ctrl, float target_a) {
     if (ctrl == NULL)
         return;
-    ctrl->state.i_link_target_a = target_a;
+    ctrl->state.i_cap_target_a = target_a;
 }
 
 void ctrl_buckboost_set_ptarget(ctrl_buckboost_t* ctrl, float target_w) {
@@ -737,11 +738,11 @@ void ctrl_buckboost_set_ptarget(ctrl_buckboost_t* ctrl, float target_w) {
     ctrl->state.p_target_w = target_w;
     ctrl->params.p_target_w = target_w;
     if (ctrl->state.target_type == BUCKBOOST_TARGET_CW) {
-        float i_link_limit = absf_fast(ctrl->state.i_link_target_a);
-        if (!algo_pid_finite(i_link_limit) || i_link_limit <= 0.0f) {
-            i_link_limit = BUCKBOOST_I_LINK_TARGET_DEFAULT;
+        float i_cap_limit = absf_fast(ctrl->state.i_cap_target_a);
+        if (!algo_pid_finite(i_cap_limit) || i_cap_limit <= 0.0f) {
+            i_cap_limit = BUCKBOOST_I_CAP_TARGET_DEFAULT;
         }
-        ctrl->state.i_link_target_a = (target_w < 0.0f) ? -i_link_limit : i_link_limit;
+        ctrl->state.i_cap_target_a = (target_w < 0.0f) ? -i_cap_limit : i_cap_limit;
     }
 }
 

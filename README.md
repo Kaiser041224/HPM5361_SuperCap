@@ -1,6 +1,60 @@
 # HPM5361 SuperCap
 
-基于 HPMicro HPM5361 (RISC-V, 480MHz) 的超级电容功率控制工程。当前工程的项目命名、板级路径、调试产物和 VS Code 配置已统一到 `HPM5361_SuperCap` / `HPM5361_SuperCap_board`。
+面向 RoboMaster 比赛的超级电容控制器。基于 HPMicro HPM5361 (RISC-V, 480MHz)，通过四开关 Buck-Boost 变换器管理 VIN / VOUT / VCAP 三端口能量，以**恒功率 (CW) 削峰填谷**策略解耦底盘瞬时功率波动，实现裁判系统侧输入功率的平滑可控。
+
+---
+
+## 设计概览
+
+### 三端口拓扑
+
+```text
+   VIN ──[IIN 检流电阻]── VOUT ──[四开关 Buck-Boost]── VCAP (超级电容电容组)
+          (2mΩ)            │
+                     底盘负载 (瞬时功率波动)
+```
+
+- **VIN**：裁判系统供电端口，当前硬件未直接采样。
+- **VOUT**：超级电容控制器输出电压，与 VIN 仅通过 IIN 检流电阻相连，直接挂接底盘负载。
+- **VCAP**：超级电容电容组电压，位于 Buck-Boost 的 cap 侧。
+- **IIN**：VIN → VOUT 检流电阻上的电流 (`INA241A3, 50V/V`)，用于 CW 功率闭环反馈。
+
+### 核心策略：恒功率削峰填谷
+
+| 工况 | 行为 |
+|------|------|
+| 底盘功率需求较低 | Buck-Boost 充电：VOUT → VCAP，向超级电容电容组储能 |
+| 底盘功率瞬时激增 | Buck-Boost 放电：VCAP → VOUT，超级电容释放能量补给负载 |
+| 稳态 | CW 功率环调节充/放平衡，保持 VIN 端口**输入功率恒定** |
+
+通过上述削峰填谷，VIN 端口的功率纹波被超级电容吸收，裁判系统观测到的功率保持平稳，避免了因瞬时超功率触发判罚。
+
+### 控制级联结构
+
+```text
+CW 功率外环 (25kHz): PI(p_target, p_in) → v_out_target_cmd
+    │
+    ▼
+VOUT 电压外环 + cap 侧 CC 竞争环 (50kHz): PI(v_out_target, vout) ⟷ PI(i_cap_target, i_cap_est)
+    │  (CV/CC 竞争输出较保守的 current_ref)
+    ▼
+电感电流内环 (200kHz): PI(current_ref, i_l) → V_L_cmd → VOUT/VCAP 前馈 → generalized_duty → DA, DB
+```
+
+- **CW 外环**：增量式 PI，输出为有符号 VOUT 电压目标，双向控制充电/放电。
+- **电压/Cap CC 竞争环**：VOUT 电压环与 cap 侧限流环取更保守的电流命令，防止过充或过放。
+- **电流内环**：增量式 PI 输出平均电感电压命令，由 VOUT/VCAP 前馈转换为归一化占空比 `generalized_duty`，再经单输入调制器生成 A/B 半桥 PWM 占空比。
+- **VCAP 动态限幅**：仅在 cap 侧进入过压区时收缩 `generalized_duty` 上限，低压区释放以保持最大调制性能。
+
+### 物理量约定
+
+| 名称 | 含义 | 用途 |
+|------|------|------|
+| VOUT | 超级电容控制器输出电压，底盘负载供电 | 电压环反馈、功率计算、Buck-Boost 前馈 |
+| VCAP | 超级电容电容组电压 | cap 侧监测、限幅参考、Buck-Boost 前馈 |
+| I_IN | VIN→VOUT 输入电流，按硬件正方向换算 | CW 环输入功率/电流反馈 |
+| I_L | 电感电流 | 电流内环反馈；cap 侧充/放电电流由 I_L 与占空比估算，仅用于 CC 竞争环 |
+| VIN | 系统总输入电压 | 当前硬件未采样；VIN 与 VOUT 仅通过 IIN 检流电阻连接 |
 
 ---
 
@@ -94,23 +148,6 @@ HPM5361_SuperCap/
 ├── Makefile
 └── CMakeLists.txt
 ```
-
----
-
-## 当前命名迁移状态
-
-已检查并确认以下关键位置使用当前项目命名：
-
-| 范围 | 当前值 |
-|------|--------|
-| 工程目录 | `HPM5361_SuperCap` |
-| VS Code workspace | `HPM5361_SuperCap.code-workspace` |
-| 默认 board | `HPM5361_SuperCap_board` |
-| OpenOCD board cfg | `Board/HPM5361_SuperCap_board/HPM5361_SuperCap_board.cfg` |
-| 输出 ELF | `output/HPM5361_SuperCap.elf` |
-| 启动日志 | `[MAIN] HPM5361 SuperCap started` |
-
-源码、文档和配置中未发现旧项目命名残留。
 
 ---
 

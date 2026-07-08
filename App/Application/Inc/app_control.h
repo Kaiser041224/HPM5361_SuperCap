@@ -36,9 +36,9 @@ typedef enum {
 typedef struct {
     struct {
         float i_l_a;
-        float vcap_v;        /* 当前 VCAP，控制模型 VLINK */
+        float vcap_v;        /* 当前 VCAP，超级电容电容组电压 */
         float i_in_a;        /* ADC 实测 I_IN 换算物理值 */
-        float vout_v;        /* 当前 VOUT，控制模型 VIN */
+        float vout_v;        /* 当前 VOUT，超级电容控制器输出电压 */
     } raw;
     struct {
         uint16_t i_l;
@@ -48,19 +48,19 @@ typedef struct {
     } raw_adc;
     struct {
         float i_l_a;
-        float vcap_v;        /* VCAP/VLINK, MA4 @50kHz: 电压外环反馈用 (稳态平滑) */
-        float vcap_fast_v;   /* VCAP/VLINK, 1阶LPF @40kHz: 电流内环前馈用 (动态快, 勿用于反馈) */
-        float i_in_a;        /* ADC1 PB13 实测 I_IN 滤波值，供功率环输入功率计算 */
-        float vout_v;        /* VOUT/VIN, 输入功率计算和 Buck-Boost 前馈用 */
+        float vcap_v;        /* VCAP, LPF @40kHz(125kHz) + MA4 @50kHz: cap 侧监测/限幅参考 */
+        float vcap_fast_v;   /* VCAP, 1阶LPF @40kHz: 电流内环前馈用 */
+        float i_in_a;        /* ADC1 PB13 实测 I_IN 滤波值，供 CW 功率/输入电流计算 */
+        float vout_v;        /* VOUT, MA4 @50kHz: 电压外环反馈和功率计算用 */
     } filt;
     struct {
         float buckboost_a;
         float buckboost_b;
     } duty;
     struct {
-        float i_load_est_a; /* VCAP/VLINK 侧电流估算，供电压环前馈 */
-        float i_in_ctrl_a;  /* app_analog_signal 已按 PCB 极性修正后的 ADC 实测 I_IN */
-        float p_in_w;       /* VOUT/VIN(filtered) × i_in_ctrl_a */
+        float i_cap_est_a;  /* cap 侧充电/放电电流估算，来自 I_L 与占空比 */
+        float i_in_a;       /* ADC 实测 I_IN，经滤波后用于 CW 环 */
+        float p_in_w;       /* VOUT(filtered) × I_IN(filtered)，VIN 当前未采样 */
         float p_target_w;
         float power_pid_out;
     } ff;

@@ -3,12 +3,13 @@
  *
  * Current hardware path:
  *   ADC0 PMT: IL, drives Buck-Boost current loop
- *   ADC1 PMT: VCAP(VLINK)/VOUT(VIN)/IIN cache, sampled from the same PWM1 trigger
+ *   ADC1 PMT: VCAP/VOUT/IIN cache, sampled from the same PWM1 trigger
  *   PWM1: Buck-Boost A/B outputs
  *
- * Voltage naming:
- *   VCAP: SuperCap node, mapped to the control model's VLINK.
- *   VOUT: three-port external voltage, mapped to the control model's VIN.
+ * Physical naming:
+ *   VOUT: 超级电容控制器输出电压；CW 环路使用 VOUT 与 IIN。
+ *   VCAP: 超级电容电容组电压；cap 侧电流由 I_L 和占空比估算，仅用于 CC 竞争环。
+ *   VIN:  系统总输入电压当前未采样；VIN 与 VOUT 之间仅串接 IIN 检流电阻。
  */
 
 #include "app_control.h"
@@ -29,17 +30,15 @@ ATTR_PLACE_AT_FAST_RAM_BSS volatile ctrl_diag_t g_ctrl_diag;
 #define CTRL_FREQ_DIVIDER 2U
 
 ATTR_PLACE_AT_FAST_RAM_BSS static ctrl_buckboost_t g_buckboost;
-ATTR_PLACE_AT_FAST_RAM_BSS static volatile uint32_t s_buckboost_vcap_sample_seq;
-ATTR_PLACE_AT_FAST_RAM_BSS static uint32_t s_buckboost_vcap_consumed_seq;
+ATTR_PLACE_AT_FAST_RAM_BSS static volatile uint32_t s_buckboost_adc_sample_seq;
+ATTR_PLACE_AT_FAST_RAM_BSS static uint32_t s_buckboost_adc_consumed_seq;
 
-static inline void buckboost_vcap_sample_reset(void)
-{
-    s_buckboost_vcap_sample_seq = 0U;
-    s_buckboost_vcap_consumed_seq = 0U;
+static inline void buckboost_sample_reset(void) {
+    s_buckboost_adc_sample_seq = 0U;
+    s_buckboost_adc_consumed_seq = 0U;
 }
 
-static inline bool ctrl_finite(float x)
-{
+static inline bool ctrl_finite(float x) {
     union {
         float f;
         uint32_t u;
@@ -48,8 +47,7 @@ static inline bool ctrl_finite(float x)
 }
 
 ATTR_RAMFUNC
-static void buckboost_current_loop_isr(void)
-{
+static void buckboost_current_loop_isr(void) {
     uint16_t raw_i_l;
     if (app_adc_get_pmt_raw(ADC_CH_I_L, &raw_i_l) != 0) {
         goto exit;
@@ -60,24 +58,24 @@ static void buckboost_current_loop_isr(void)
     g_ctrl_diag.raw.i_l_a = phys_i_l;
     g_ctrl_diag.filt.i_l_a = app_analog_signal_lpf_step_fast(ADC_CH_I_L, phys_i_l);
 
-    uint16_t raw_vlink;
-    if (app_adc_get_pmt_raw(APP_ADC_CH_VLINK, &raw_vlink) != 0) {
+    uint16_t raw_vcap;
+    if (app_adc_get_pmt_raw(ADC_CH_VCAP, &raw_vcap) != 0) {
         goto exit;
     }
-    g_ctrl_diag.raw_adc.vcap = raw_vlink;
-    float phys_vlink;
-    app_analog_signal_convert_raw(APP_ADC_CH_VLINK, raw_vlink, &phys_vlink);
-    g_ctrl_diag.raw.vcap_v = phys_vlink;
-    g_ctrl_diag.filt.vcap_fast_v = app_analog_signal_lpf_step_fast(APP_ADC_CH_VLINK, phys_vlink);
-    s_buckboost_vcap_sample_seq++;
+    g_ctrl_diag.raw_adc.vcap = raw_vcap;
+    float phys_vcap;
+    app_analog_signal_convert_raw(ADC_CH_VCAP, raw_vcap, &phys_vcap);
+    g_ctrl_diag.raw.vcap_v = phys_vcap;
+    g_ctrl_diag.filt.vcap_fast_v = app_analog_signal_lpf_step_fast(ADC_CH_VCAP, phys_vcap);
+    s_buckboost_adc_sample_seq++;
 
     ATTR_PLACE_AT_FAST_RAM_BSS static uint8_t s_ctrl_div = 0;
     if (++s_ctrl_div >= CTRL_FREQ_DIVIDER) {
         s_ctrl_div = 0;
-        float vin = g_ctrl_diag.filt.vout_v;       /* current VOUT == control VIN */
-        float vlink = g_ctrl_diag.filt.vcap_fast_v; /* current VCAP == control VLINK */
+        float vout = g_ctrl_diag.filt.vout_v;
+        float vcap = g_ctrl_diag.filt.vcap_fast_v;
 
-        ctrl_buckboost_update_current(&g_buckboost, g_ctrl_diag.filt.i_l_a, vin, vlink);
+        ctrl_buckboost_update_current(&g_buckboost, g_ctrl_diag.filt.i_l_a, vout, vcap);
 
         g_ctrl_diag.duty.buckboost_a = ctrl_buckboost_get_duty_a(&g_buckboost);
         g_ctrl_diag.duty.buckboost_b = ctrl_buckboost_get_duty_b(&g_buckboost);
@@ -89,63 +87,85 @@ exit:;
 }
 
 ATTR_RAMFUNC
-static void buckboost_voltage_loop_isr(void)
-{
-    uint32_t vcap_sample_seq = s_buckboost_vcap_sample_seq;
-    if (vcap_sample_seq == 0U || vcap_sample_seq == s_buckboost_vcap_consumed_seq) {
+static void buckboost_voltage_loop_isr(void) {
+    uint32_t adc_sample_seq = s_buckboost_adc_sample_seq;
+    if (adc_sample_seq == 0U || adc_sample_seq == s_buckboost_adc_consumed_seq) {
         goto exit;
     }
-    s_buckboost_vcap_consumed_seq = vcap_sample_seq;
+    s_buckboost_adc_consumed_seq = adc_sample_seq;
 
-    float vlink_fb = app_analog_signal_ma_step(APP_ADC_CH_VLINK, g_ctrl_diag.filt.vcap_fast_v);
-    if (!ctrl_finite(vlink_fb)) {
+    uint16_t raw_vout;
+    if (app_adc_get_pmt_raw(ADC_CH_VOUT, &raw_vout) != 0) {
         goto exit;
     }
-    g_ctrl_diag.filt.vcap_v = vlink_fb;
+    g_ctrl_diag.raw_adc.vout = raw_vout;
+    float phys_vout;
+    app_analog_signal_convert_raw(ADC_CH_VOUT, raw_vout, &phys_vout);
+    g_ctrl_diag.raw.vout_v = phys_vout;
+    float vout_fb = app_analog_signal_ma_step(ADC_CH_VOUT, phys_vout);
+    if (!ctrl_finite(vout_fb)) {
+        goto exit;
+    }
+    g_ctrl_diag.filt.vout_v = vout_fb;
+
+    float vcap_monitor = app_analog_signal_ma_step(ADC_CH_VCAP, g_ctrl_diag.filt.vcap_fast_v);
+    if (ctrl_finite(vcap_monitor)) {
+        g_ctrl_diag.filt.vcap_v = vcap_monitor;
+    }
 
     float i_l = g_ctrl_diag.filt.i_l_a;
     float g = g_buckboost.state.generalized_duty;
     float d_max = g_buckboost.params.duty_max;
-    float i_load_ff = 0.0f;
+    float i_cap_est = 0.0f;
     if (ctrl_finite(i_l) && ctrl_finite(g) && ctrl_finite(d_max)) {
         float gc = (g < 0.0f) ? 0.0f : (g > 1.0f) ? 1.0f : g;
-        i_load_ff = i_l * d_max * (1.0f - gc);
+        i_cap_est = i_l * d_max * (1.0f - gc);
     }
-    g_ctrl_diag.ff.i_load_est_a = i_load_ff;
+    g_ctrl_diag.ff.i_cap_est_a = i_cap_est;
 
-    ctrl_buckboost_update_voltage(&g_buckboost, vlink_fb, i_load_ff, i_load_ff);
+    ctrl_buckboost_update_voltage(&g_buckboost, vout_fb, i_cap_est, i_cap_est);
 
 exit:;
 }
 
 ATTR_RAMFUNC
-static void buckboost_power_loop_isr(void)
-{
-    uint16_t raw_vin, raw_i_in;
-    if (app_adc_get_pmt_raw(APP_ADC_CH_VIN, &raw_vin) != 0
-        || app_adc_get_pmt_raw(ADC_CH_I_IN, &raw_i_in) != 0) {
+static void buckboost_power_loop_isr(void) {
+    uint16_t raw_i_in;
+    if (app_adc_get_pmt_raw(ADC_CH_I_IN, &raw_i_in) != 0) {
         goto exit;
     }
-    g_ctrl_diag.raw_adc.vout = raw_vin;
     g_ctrl_diag.raw_adc.i_in = raw_i_in;
 
-    float phys_vin, phys_i_in;
-    app_analog_signal_convert_raw(APP_ADC_CH_VIN, raw_vin, &phys_vin);
+    float phys_vout = 0.0f;
+    uint16_t raw_vout;
+    bool vout_raw_valid = (app_adc_get_pmt_raw(ADC_CH_VOUT, &raw_vout) == 0);
+    if (vout_raw_valid) {
+        g_ctrl_diag.raw_adc.vout = raw_vout;
+        app_analog_signal_convert_raw(ADC_CH_VOUT, raw_vout, &phys_vout);
+        g_ctrl_diag.raw.vout_v = phys_vout;
+    }
+
+    float phys_i_in;
     app_analog_signal_convert_raw(ADC_CH_I_IN, raw_i_in, &phys_i_in);
-    g_ctrl_diag.raw.vout_v = phys_vin;
     g_ctrl_diag.raw.i_in_a = phys_i_in;
 
-    g_ctrl_diag.filt.vout_v = app_analog_signal_ma_step(APP_ADC_CH_VIN, phys_vin);
-    float i_in_lpf = app_analog_signal_lpf_step_fast(ADC_CH_I_IN, phys_i_in);
-    g_ctrl_diag.filt.i_in_a = app_analog_signal_ma_step(ADC_CH_I_IN, i_in_lpf);
+    g_ctrl_diag.filt.i_in_a = app_analog_signal_lpf_step_fast(ADC_CH_I_IN, phys_i_in);
 
     float i_in = g_ctrl_diag.filt.i_in_a;
     if (!ctrl_finite(i_in)) {
         i_in = 0.0f;
     }
-    g_ctrl_diag.ff.i_in_ctrl_a = i_in;
+    g_ctrl_diag.ff.i_in_a = i_in;
 
-    float p_in = g_ctrl_diag.filt.vout_v * i_in;
+    float vout = g_ctrl_diag.filt.vout_v;
+    if (!ctrl_finite(vout) && vout_raw_valid) {
+        vout = phys_vout;
+    }
+    if (!ctrl_finite(vout)) {
+        vout = 0.0f;
+    }
+
+    float p_in = vout * i_in;
     if (!ctrl_finite(p_in)) {
         p_in = 0.0f;
     }
@@ -164,8 +184,7 @@ static sys_state_t s_state = SYS_INIT;
 static op_mode_t s_mode = MODE_IDLE;
 static bool s_self_test_ok;
 
-static void configure_controllers_for_mode(void)
-{
+static void configure_controllers_for_mode(void) {
     switch (s_mode) {
     case MODE_BUCK_CV: ctrl_buckboost_set_target_type(&g_buckboost, BUCKBOOST_TARGET_CV); break;
     case MODE_BUCK_CC: ctrl_buckboost_set_target_type(&g_buckboost, BUCKBOOST_TARGET_CC); break;
@@ -176,9 +195,8 @@ static void configure_controllers_for_mode(void)
     }
 }
 
-void app_control_init(void)
-{
-    buckboost_vcap_sample_reset();
+void app_control_init(void) {
+    buckboost_sample_reset();
 
     ctrl_fault_init(NULL);
     ctrl_buckboost_init(&g_buckboost);
@@ -199,8 +217,7 @@ void app_control_init(void)
     s_self_test_ok = false;
 }
 
-void app_control_tick(void)
-{
+void app_control_tick(void) {
     uint32_t faults = ctrl_fault_check();
     if (faults != 0U) {
         app_control_emergency();
@@ -217,19 +234,15 @@ void app_control_tick(void)
         break;
     case SYS_IDLE:
     case SYS_RUN:
-    case SYS_FAULT:
-        break;
-    default:
-        s_state = SYS_INIT;
-        break;
+    case SYS_FAULT: break;
+    default: s_state = SYS_INIT; break;
     }
 }
 
 sys_state_t app_control_get_state(void) { return s_state; }
 op_mode_t app_control_get_mode(void) { return s_mode; }
 
-int app_control_set_mode(op_mode_t mode)
-{
+int app_control_set_mode(op_mode_t mode) {
     switch (mode) {
     case MODE_IDLE:
     case MODE_STANDBY:
@@ -244,8 +257,7 @@ int app_control_set_mode(op_mode_t mode)
             return -1;
         }
         break;
-    default:
-        return -1;
+    default: return -1;
     }
 
     s_mode = mode;
@@ -253,8 +265,7 @@ int app_control_set_mode(op_mode_t mode)
     return 0;
 }
 
-int app_control_power_enable(void)
-{
+int app_control_power_enable(void) {
     if (s_state != SYS_IDLE || !s_self_test_ok) {
         return -1;
     }
@@ -266,20 +277,18 @@ int app_control_power_enable(void)
     return 0;
 }
 
-void app_control_power_disable(void)
-{
+void app_control_power_disable(void) {
     app_gptmr_stop_all();
-    buckboost_vcap_sample_reset();
+    buckboost_sample_reset();
     ctrl_buckboost_disable(&g_buckboost);
     app_hrpwm_set_duty(HRPWM_BUCKBOOST_A, 0.0f);
     app_hrpwm_set_duty(HRPWM_BUCKBOOST_B, 0.0f);
     s_state = SYS_IDLE;
 }
 
-void app_control_emergency(void)
-{
+void app_control_emergency(void) {
     app_gptmr_stop_all();
-    buckboost_vcap_sample_reset();
+    buckboost_sample_reset();
     app_hrpwm_emergency_stop();
     ctrl_buckboost_emergency_stop(&g_buckboost);
     s_state = SYS_FAULT;
@@ -287,11 +296,10 @@ void app_control_emergency(void)
 
 uint32_t app_control_get_faults(void) { return ctrl_fault_get_active(); }
 
-int app_control_clear_faults(void)
-{
+int app_control_clear_faults(void) {
     int ret = ctrl_fault_clear_all();
     if (ret == 0) {
-        buckboost_vcap_sample_reset();
+        buckboost_sample_reset();
         s_state = SYS_INIT;
     }
     return ret;

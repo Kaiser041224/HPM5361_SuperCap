@@ -2,8 +2,8 @@
  * ADC App Layer
  *
  * HPM5361 引脚→ADC 通道映射 (依据当前硬件 pinmux):
- *   PB11 → ADC1 ch3: VCAP (control-model VLINK)
- *   PB12 → ADC1 ch4: VOUT (control-model VIN)
+ *   PB11 → ADC1 ch3: VOUT (超级电容控制器输出电压)
+ *   PB12 → ADC1 ch4: VCAP (超级电容电容组电压)
  *   PB13 → ADC1 ch5: IIN
  *   PB14 → ADC0 ch6: IL
  *
@@ -22,21 +22,12 @@
  * ============================================================================ */
 
 typedef enum {
-    ADC_CH_VCAP = 0, /* PB11, ADC1 ch3: 超级电容电压；控制模型 VLINK */
-    ADC_CH_VOUT = 1, /* PB12, ADC1 ch4: 三端口 VOUT；控制模型 VIN */
+    ADC_CH_VCAP = 0, /* PB12, ADC1 ch4: 超级电容电容组电压 */
+    ADC_CH_VOUT = 1, /* PB11, ADC1 ch3: 超级电容控制器输出电压 */
     ADC_CH_I_IN = 2, /* PB13, ADC1 ch5: 输入电流 */
     ADC_CH_I_L = 3,  /* PB14, ADC0 ch6: 电感电流，电流内环 */
     ADC_CH_COUNT,
 } adc_channel_t;
-
-/*
- * Control-model aliases.
- * The SuperCap hardware names differ from the source-project/control model:
- *   VCAP -> VLINK (super-capacitor node)
- *   VOUT -> VIN   (external port voltage used as model input voltage)
- */
-#define APP_ADC_CH_VLINK ADC_CH_VCAP
-#define APP_ADC_CH_VIN   ADC_CH_VOUT
 
 typedef enum {
     APP_ADC_INST_0 = 0,
@@ -50,13 +41,13 @@ typedef enum {
 
 #define APP_ADC_PMT_TRIGGER_CMP_INDEX_ADC0_PWM1 (10U)
 #define APP_ADC_PMT_TRIGGER_CMP_INDEX_ADC1_PWM1 (11U)
-#define APP_ADC_PMT_POSITION_RATIO_ADC0 (0.5f)
-#define APP_ADC_PMT_POSITION_RATIO_ADC1 (0.0f)
-#define APP_ADC_PMT_ADC0_TRIG_CH        (0U)
-#define APP_ADC_PMT_ADC1_TRIG_CH        (3U)
-#define APP_ADC_PMT_ADC0_CH_COUNT       (2U)
-#define APP_ADC_PMT_ADC1_CH_COUNT       (4U)
-#define APP_ADC_PMT_DMA_BUFF_LEN        (48U)
+#define APP_ADC_PMT_POSITION_RATIO_ADC0         (0.5f)
+#define APP_ADC_PMT_POSITION_RATIO_ADC1         (0.25f)
+#define APP_ADC_PMT_ADC0_TRIG_CH                (0U)
+#define APP_ADC_PMT_ADC1_TRIG_CH                (3U)
+#define APP_ADC_PMT_ADC0_CH_COUNT               (2U)
+#define APP_ADC_PMT_ADC1_CH_COUNT               (4U)
+#define APP_ADC_PMT_DMA_BUFF_LEN                (48U)
 
 /* ============================================================================
  * Calibration

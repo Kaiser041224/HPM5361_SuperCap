@@ -25,4 +25,4 @@
 ## ADC 触发
 
 `PWM1 CMP10` 在载波中心触发 ADC0 PMT，用于 `IL` 电流内环采样。
-`PWM1 CMP11` 在载波 0 位置触发 ADC1 PMT，用于 `VCAP(VLINK)`、`VOUT(VIN)`、`IIN` 外环/功率采样。
+`PWM1 CMP11` 在载波中心触发 ADC1 PMT，用于 `VOUT`、`VCAP`、`IIN` 外环/功率采样。
