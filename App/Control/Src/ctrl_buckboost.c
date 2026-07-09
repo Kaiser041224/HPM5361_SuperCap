@@ -31,33 +31,79 @@
 # define ATTR_RAMFUNC __attribute__((section(".fast")))
 #endif
 
-/* 物理 PWM duty 默认范围: 最终写入 HRPWM 的 DA/DB 上限 */
+/* ============================================================================
+ * 默认参数与限幅值（按控制模式分组）
+ * ============================================================================ */
+
+/* 物理 PWM 占空比范围（最终写入 HRPWM 的 DA/DB）*/
 #define BUCKBOOST_DUTY_MIN_DEFAULT 0.0f
-#define BUCKBOOST_DUTY_MAX_DEFAULT 0.95f
+#define BUCKBOOST_DUTY_MAX_DEFAULT 0.95f /* 留 5% 死区防饱和 */
 
-/* 控制保护默认值 */
-#define BUCKBOOST_I_L_LIMIT_DEFAULT      32.0f
-#define BUCKBOOST_V_OUT_LIMIT_DEFAULT    32.0f
-#define BUCKBOOST_V_OUT_TARGET_DEFAULT   24.0f
-#define BUCKBOOST_I_CAP_TARGET_DEFAULT   27.0f
-#define BUCKBOOST_BUS_SUM_MIN_V          1.0f
-#define BUCKBOOST_VCAP_LIMIT_ENTER_RATIO 1.00f
-#define BUCKBOOST_VCAP_LIMIT_EXIT_RATIO  0.96f
+/* ============================================================================
+ * 模式 A：CV 独立模式
+ * ============================================================================ */
+#define BUCKBOOST_CV_VCAP_SETPOINT_V_DEFAULT 23.5f /* 单体 2.7V × 9 串 ≈ 24.3V，降额 800mV */
 
-/* 功率环 PID 输出范围 */
-#define BUCKBOOST_POWER_PID_OUT_MAX 27.0f
-#define BUCKBOOST_POWER_PID_OUT_MIN (-BUCKBOOST_POWER_PID_OUT_MAX)
-/* 电流环 PID 输出为有符号平均电感电压命令 V_L_cmd */
-#define BUCKBOOST_CURRENT_PID_OUT_MIN (-32.0f)
-#define BUCKBOOST_CURRENT_PID_OUT_MAX (32.0f)
+/* ============================================================================
+ * 模式 B：CC 独立模式
+ * ============================================================================ */
+#define BUCKBOOST_CC_ICAP_SETPOINT_A_DEFAULT 5.0f /* CAP 端充放电电流默认值 */
 
-/* 电压环 PID 输出为电流命令 current_ref (A)，范围 ±i_l_limit */
-#define BUCKBOOST_VOLTAGE_PID_OUT_MIN (-BUCKBOOST_I_L_LIMIT_DEFAULT)
-#define BUCKBOOST_VOLTAGE_PID_OUT_MAX (BUCKBOOST_I_L_LIMIT_DEFAULT)
+/* ============================================================================
+ * 模式 C：CV_CC 竞争模式（CV 与 CC 竞争取保守值）
+ * ============================================================================ */
+/* 复用 BUCKBOOST_CV_VCAP_SETPOINT_V_DEFAULT 和 BUCKBOOST_CC_ICAP_SETPOINT_A_DEFAULT */
 
-/* generalized_duty 命令范围: 单输入调制器的最终命令钳位 */
+/* ============================================================================
+ * 模式 D：CW 级联模式（CW → CV_CC → 电流内环）
+ * ============================================================================ */
+/* CW 功率环输出范围：动态调节 CV 的 v_cap_target_v */
+#define BUCKBOOST_CW_VCAP_SETPOINT_MAX_V BUCKBOOST_CV_VCAP_SETPOINT_V_DEFAULT
+#define BUCKBOOST_CW_VCAP_SETPOINT_MIN_V -27.0f
+
+/* CW 启动前的 v_cap_target_v 预设值（用于平滑切入）*/
+#define BUCKBOOST_CW_VCAP_INIT_V 23.5f
+
+/* ============================================================================
+ * 硬件保护层（跨模式通用）
+ * ============================================================================ */
+/* 电流内环：电感电流 I_L 限幅 (A) */
+#define BUCKBOOST_I_L_LIMIT_A_DEFAULT 32.0f /* 硬件电流采样上限 */
+
+/* VCAP 绝对过压保护阈值 (V)：触发 fault、emergency stop */
+#define BUCKBOOST_VCAP_OVP_THRESHOLD_V 24.0f
+
+/* 控制算法电压裕量 (V)：CW 输出限幅 + 电流内环 V_L_cmd 限幅 */
+#define BUCKBOOST_CONTROL_VOLTAGE_MARGIN_V 32.0f
+
+/* ============================================================================
+ * PID 输出限幅（按控制环分组）
+ * ============================================================================ */
+/* 电流内环 PID 输出：有符号平均电感电压命令 V_L_cmd (V) */
+#define BUCKBOOST_CURRENT_PID_OUT_V_MIN (-BUCKBOOST_CONTROL_VOLTAGE_MARGIN_V)
+#define BUCKBOOST_CURRENT_PID_OUT_V_MAX (BUCKBOOST_CONTROL_VOLTAGE_MARGIN_V)
+
+/* 电压外环 PID 输出：电流参考 current_ref (A)，沿用电感电流限幅 */
+#define BUCKBOOST_VOLTAGE_PID_OUT_A_MIN (-BUCKBOOST_I_L_LIMIT_A_DEFAULT)
+#define BUCKBOOST_VOLTAGE_PID_OUT_A_MAX (BUCKBOOST_I_L_LIMIT_A_DEFAULT)
+
+/* 功率环 PID 输出：VCAP setpoint (V)，沿用 CW 模式范围 */
+#define BUCKBOOST_POWER_PID_OUT_V_MIN BUCKBOOST_CW_VCAP_SETPOINT_MIN_V
+#define BUCKBOOST_POWER_PID_OUT_V_MAX BUCKBOOST_CW_VCAP_SETPOINT_MAX_V
+
+/* ============================================================================
+ * 调制器与前馈保护
+ * ============================================================================ */
+/* generalized_duty 归一化占空比命令范围 [0, 1] */
 #define BUCKBOOST_GENERALIZED_DUTY_MIN 0.0f
-#define BUCKBOOST_GENERALIZED_DUTY_MAX 0.98f
+#define BUCKBOOST_GENERALIZED_DUTY_MAX 0.98f /* 留 2% 余量防调制器饱和 */
+
+/* VCAP 动态限幅：前馈限幅器进入/退出阈值（相对 VCAP_OVP_THRESHOLD 的比例）*/
+#define BUCKBOOST_VCAP_LIMIT_ENTER_RATIO 1.00f /* VCAP ≥ 阈值时触发 */
+#define BUCKBOOST_VCAP_LIMIT_EXIT_RATIO  0.96f /* VCAP < 96% 阈值时解除 */
+
+/* 前馈分母保护：VOUT + VCAP 最小和（避免除零）*/
+#define BUCKBOOST_BUS_SUM_MIN_V 1.0f
 
 static inline __attribute__((always_inline)) float clampf(float x, float lo, float hi) {
     if (x < lo)
@@ -333,8 +379,8 @@ int ctrl_buckboost_init(ctrl_buckboost_t* ctrl) {
 
     ctrl->params.duty_min = BUCKBOOST_DUTY_MIN_DEFAULT;
     ctrl->params.duty_max = BUCKBOOST_DUTY_MAX_DEFAULT;
-    ctrl->params.i_l_limit_a = BUCKBOOST_I_L_LIMIT_DEFAULT;
-    ctrl->params.v_out_limit_v = BUCKBOOST_V_OUT_LIMIT_DEFAULT;
+    ctrl->params.i_l_limit_a = BUCKBOOST_I_L_LIMIT_A_DEFAULT;
+    ctrl->params.v_out_limit_v = BUCKBOOST_VCAP_OVP_THRESHOLD_V;
     ctrl->params.voltage_ff_gain = 0.8f;
 
     algo_pid_ctor(&ctrl->state.current_pid);
@@ -345,10 +391,10 @@ int ctrl_buckboost_init(ctrl_buckboost_t* ctrl) {
         .ki = 325.0f,
         .kd = 0.0f,
         .sample_time_s = 1.0f / 100000.0f,
-        .out_min = BUCKBOOST_CURRENT_PID_OUT_MIN,
-        .out_max = BUCKBOOST_CURRENT_PID_OUT_MAX,
-        .integral_min = BUCKBOOST_CURRENT_PID_OUT_MIN,
-        .integral_max = BUCKBOOST_CURRENT_PID_OUT_MAX,
+        .out_min = BUCKBOOST_CURRENT_PID_OUT_V_MIN,
+        .out_max = BUCKBOOST_CURRENT_PID_OUT_V_MAX,
+        .integral_min = BUCKBOOST_CURRENT_PID_OUT_V_MIN,
+        .integral_max = BUCKBOOST_CURRENT_PID_OUT_V_MAX,
         .antiwindup = ALGO_PID_ANTIWINDUP_CLAMP,
         .backcalc_coeff = 1.0f,
         .deriv_filter_coeff = 0.0f,
@@ -362,14 +408,14 @@ int ctrl_buckboost_init(ctrl_buckboost_t* ctrl) {
     algo_pid_ctor(&ctrl->state.voltage_pid);
     algo_pid_cfg_t voltage_pid_cfg = {
         .mode = ALGO_PID_MODE_POSITIONAL,
-        .kp = 1.0f,
-        .ki = 500.0f,
+        .kp = 1.25f,
+        .ki = 125.0f,
         .kd = 0.0f,
         .sample_time_s = 1.0f / 50000.0f,
-        .out_min = BUCKBOOST_VOLTAGE_PID_OUT_MIN,
-        .out_max = BUCKBOOST_VOLTAGE_PID_OUT_MAX,
-        .integral_min = BUCKBOOST_VOLTAGE_PID_OUT_MIN,
-        .integral_max = BUCKBOOST_VOLTAGE_PID_OUT_MAX,
+        .out_min = BUCKBOOST_VOLTAGE_PID_OUT_A_MIN,
+        .out_max = BUCKBOOST_VOLTAGE_PID_OUT_A_MAX,
+        .integral_min = BUCKBOOST_VOLTAGE_PID_OUT_A_MIN,
+        .integral_max = BUCKBOOST_VOLTAGE_PID_OUT_A_MAX,
         .antiwindup = ALGO_PID_ANTIWINDUP_CLAMP,
         .backcalc_coeff = 1.0f,
         .deriv_filter_coeff = 0.0f,
@@ -383,14 +429,14 @@ int ctrl_buckboost_init(ctrl_buckboost_t* ctrl) {
     algo_pid_ctor(&ctrl->state.current_cc_pid);
     algo_pid_cfg_t cc_pid_cfg = {
         .mode = ALGO_PID_MODE_INCREMENTAL,
-        .kp = 0.25f,
-        .ki = 1000.0f,
+        .kp = 0.225f,
+        .ki = 1250.0f,
         .kd = 0.0f,
         .sample_time_s = 1.0f / 50000.0f,
-        .out_min = -BUCKBOOST_I_L_LIMIT_DEFAULT,
-        .out_max = BUCKBOOST_I_L_LIMIT_DEFAULT,
-        .integral_min = -BUCKBOOST_I_L_LIMIT_DEFAULT,
-        .integral_max = BUCKBOOST_I_L_LIMIT_DEFAULT,
+        .out_min = -BUCKBOOST_I_L_LIMIT_A_DEFAULT,
+        .out_max = BUCKBOOST_I_L_LIMIT_A_DEFAULT,
+        .integral_min = -BUCKBOOST_I_L_LIMIT_A_DEFAULT,
+        .integral_max = BUCKBOOST_I_L_LIMIT_A_DEFAULT,
         .antiwindup = ALGO_PID_ANTIWINDUP_CLAMP,
         .backcalc_coeff = 1.0f,
         .deriv_filter_coeff = 0.0f,
@@ -404,14 +450,14 @@ int ctrl_buckboost_init(ctrl_buckboost_t* ctrl) {
     algo_pid_ctor(&ctrl->state.power_pid);
     algo_pid_cfg_t power_pid_cfg = {
         .mode = ALGO_PID_MODE_INCREMENTAL,
-        .kp = 0.025f,
-        .ki = 128.0f,
+        .kp = 0.125f,
+        .ki = 125.0f,
         .kd = 0.0f,
         .sample_time_s = 1.0f / 25000.0f,
-        .out_min = BUCKBOOST_POWER_PID_OUT_MIN,
-        .out_max = BUCKBOOST_POWER_PID_OUT_MAX,
-        .integral_min = BUCKBOOST_POWER_PID_OUT_MIN,
-        .integral_max = BUCKBOOST_POWER_PID_OUT_MAX,
+        .out_min = BUCKBOOST_POWER_PID_OUT_V_MIN,
+        .out_max = BUCKBOOST_POWER_PID_OUT_V_MAX,
+        .integral_min = BUCKBOOST_POWER_PID_OUT_V_MIN,
+        .integral_max = BUCKBOOST_POWER_PID_OUT_V_MAX,
         .antiwindup = ALGO_PID_ANTIWINDUP_CLAMP,
         .backcalc_coeff = 1.0f,
         .deriv_filter_coeff = 0.0f,
@@ -425,13 +471,13 @@ int ctrl_buckboost_init(ctrl_buckboost_t* ctrl) {
         .kp = power_pid_cfg.kp,
         .ki = power_pid_cfg.ki,
         .kd = power_pid_cfg.kd,
-        .integral_max = BUCKBOOST_POWER_PID_OUT_MAX,
-        .output_max = BUCKBOOST_POWER_PID_OUT_MAX,
-        .output_min = BUCKBOOST_POWER_PID_OUT_MIN,
+        .integral_max = BUCKBOOST_POWER_PID_OUT_V_MAX,
+        .output_max = BUCKBOOST_POWER_PID_OUT_V_MAX,
+        .output_min = BUCKBOOST_POWER_PID_OUT_V_MIN,
     };
 
-    ctrl->state.v_out_target_v = BUCKBOOST_V_OUT_TARGET_DEFAULT;
-    ctrl->state.i_cap_target_a = BUCKBOOST_I_CAP_TARGET_DEFAULT;
+    ctrl->state.v_cap_target_v = BUCKBOOST_CV_VCAP_SETPOINT_V_DEFAULT;
+    ctrl->state.i_cap_target_a = BUCKBOOST_CC_ICAP_SETPOINT_A_DEFAULT;
     ctrl->state.p_target_w = BUCKBOOST_P_TARGET_DEFAULT;
     ctrl->params.p_target_w = BUCKBOOST_P_TARGET_DEFAULT;
 
@@ -460,6 +506,59 @@ int ctrl_buckboost_enable(ctrl_buckboost_t* ctrl) {
         ctrl->state.power_pid.reset(&ctrl->state.power_pid);
     }
     return 0;
+}
+
+/* ============================================================================
+ * 软启动 (Soft Start): 按稳态 g = VCAP / (VOUT + VCAP) 预置初值，避免冲击
+ * ============================================================================ */
+
+void ctrl_buckboost_soft_start(ctrl_buckboost_t* ctrl, float vout, float vcap) {
+    if (ctrl == NULL) {
+        return;
+    }
+
+    float vout_abs = absf_fast(vout);
+    float vcap_abs = absf_fast(vcap);
+    float bus_sum = vout_abs + vcap_abs;
+
+    float g_ss;
+    if (!algo_pid_finite(bus_sum) || bus_sum <= BUCKBOOST_BUS_SUM_MIN_V) {
+        g_ss = 0.0f;
+    } else {
+        g_ss = vcap_abs / bus_sum;
+        if (!algo_pid_finite(g_ss)) {
+            g_ss = 0.0f;
+        }
+    }
+
+    buckboost_mod_ctx_t mod_ctx;
+    if (buckboost_prepare_mod_ctx(ctrl->params.duty_min, ctrl->params.duty_max, &mod_ctx)) {
+        g_ss = clampf(g_ss, mod_ctx.g_min, mod_ctx.g_max);
+    }
+
+    ctrl->state.generalized_duty = g_ss;
+    ctrl->state.duty_a = ctrl->params.duty_max * g_ss;
+    ctrl->state.duty_b = ctrl->params.duty_max * (1.0f - g_ss);
+    ctrl->state.v_cmd = 0.0f;
+    ctrl->state.vcap_limit_active = false;
+
+    ctrl->state.current_ref = 0.0f;
+    ctrl->state.voltage_pid_out = 0.0f;
+    ctrl->state.cc_pid_out = 0.0f;
+    ctrl->state.power_pid_out = 0.0f;
+
+    if (ctrl->state.current_pid.reset) {
+        ctrl->state.current_pid.reset(&ctrl->state.current_pid);
+    }
+    if (ctrl->state.voltage_pid.reset) {
+        ctrl->state.voltage_pid.reset(&ctrl->state.voltage_pid);
+    }
+    if (ctrl->state.current_cc_pid.reset) {
+        ctrl->state.current_cc_pid.reset(&ctrl->state.current_cc_pid);
+    }
+    if (ctrl->state.power_pid.reset) {
+        ctrl->state.power_pid.reset(&ctrl->state.power_pid);
+    }
 }
 
 void ctrl_buckboost_disable(ctrl_buckboost_t* ctrl) {
@@ -556,7 +655,7 @@ void ctrl_buckboost_update_current(ctrl_buckboost_t* ctrl, float i_l, float vout
 
     float voltage_limit = absf_fast(ctrl->params.v_out_limit_v);
     if (!algo_pid_finite(voltage_limit) || voltage_limit <= 0.0f) {
-        voltage_limit = BUCKBOOST_V_OUT_LIMIT_DEFAULT;
+        voltage_limit = BUCKBOOST_VCAP_OVP_THRESHOLD_V;
     }
     v_l_cmd = clampf(v_l_cmd, -voltage_limit, voltage_limit);
 
@@ -589,26 +688,26 @@ void ctrl_buckboost_update_current(ctrl_buckboost_t* ctrl, float i_l, float vout
 }
 
 /* ============================================================================
- * VOUT 电压外环 + cap 侧估算电流限流环 update (50kHz)
+ * VCAP 电压外环 + cap 侧估算电流限流环 update (50kHz)
  * ============================================================================ */
 
 ATTR_RAMFUNC
 void ctrl_buckboost_update_voltage(
-    ctrl_buckboost_t* ctrl, float vout, float i_cap_ff, float i_cap_est) {
+    ctrl_buckboost_t* ctrl, float vcap, float i_cap_ff, float i_cap_est) {
     if (ctrl == NULL || !ctrl->state.enabled) {
         return;
     }
-    if (!algo_pid_finite(vout) || !algo_pid_finite(ctrl->state.v_out_target_v)) {
+    if (!algo_pid_finite(vcap) || !algo_pid_finite(ctrl->state.v_cap_target_v)) {
         return;
     }
 
     float i_limit = ctrl->params.i_l_limit_a;
     if (i_limit <= 0.0f)
-        i_limit = BUCKBOOST_I_L_LIMIT_DEFAULT;
+        i_limit = BUCKBOOST_I_L_LIMIT_A_DEFAULT;
 
     /* CV: PI + 前馈 */
     float i_ref_cv =
-        ctrl->state.voltage_pid.step(&ctrl->state.voltage_pid, ctrl->state.v_out_target_v, vout)
+        ctrl->state.voltage_pid.step(&ctrl->state.voltage_pid, ctrl->state.v_cap_target_v, vcap)
         + i_cap_ff * ctrl->params.voltage_ff_gain;
     if (!algo_pid_finite(i_ref_cv))
         i_ref_cv = 0.0f;
@@ -624,19 +723,29 @@ void ctrl_buckboost_update_voltage(
     i_ref_cc = clampf(i_ref_cc, -i_limit, i_limit);
     ctrl->state.cc_pid_out = i_ref_cc;
 
-    /* CV/CC 竞争: 取更保守的值 */
-    float i_ref_cmd = (i_cap_target >= 0.0f) ? ((i_ref_cv < i_ref_cc) ? i_ref_cv : i_ref_cc)
-                                             : ((i_ref_cv > i_ref_cc) ? i_ref_cv : i_ref_cc);
-
-    if (ctrl->state.target_type == BUCKBOOST_TARGET_CV
+    /* CV/CC 独立模式各自驱动 current_ref；CV_CC 与 CW 共用竞争逻辑
+     * (CW 的 v_cap_target_v 由功率环动态调节，CV/CC 竞争在此基础上继续做过压/过流保护) */
+    if (ctrl->state.target_type == BUCKBOOST_TARGET_CV) {
+        ctrl->state.current_ref = i_ref_cv;
+    } else if (ctrl->state.target_type == BUCKBOOST_TARGET_CC) {
+        ctrl->state.current_ref = i_ref_cc;
+    } else if (
+        ctrl->state.target_type == BUCKBOOST_TARGET_CV_CC
         || ctrl->state.target_type == BUCKBOOST_TARGET_CW) {
-        (void)i_ref_cmd; /* Current-loop tuning: keep outer-loop command disconnected for now. */
-        // ctrl->state.current_ref = i_ref_cmd;
+        float i_ref_cmd = (i_cap_target >= 0.0f) ? ((i_ref_cv < i_ref_cc) ? i_ref_cv : i_ref_cc)
+                                                 : ((i_ref_cv > i_ref_cc) ? i_ref_cv : i_ref_cc);
+        ctrl->state.current_ref = i_ref_cmd;
     }
 }
 
 /* ============================================================================
- * CW 功率外环 update (25kHz): p_in = VOUT × IIN
+ * CW 功率外环 update (25kHz): p_in = VOUT × IIN ≈ VIN × IIN
+ *
+ * 设计原理：通过动态调节 VCAP 目标电压实现功率平衡
+ *   - p_in > p_target → 降低 v_cap_target_v → 放电（VCAP → VOUT）
+ *   - p_in < p_target → 抬高 v_cap_target_v → 充电（VOUT → VCAP）
+ *
+ * 当前参数状态：kp=0.025, ki=128 为初始值，未经实测整定
  * ============================================================================ */
 
 ATTR_RAMFUNC
@@ -659,15 +768,15 @@ void ctrl_buckboost_update_power(ctrl_buckboost_t* ctrl, float p_in) {
 
     float v_limit = ctrl->params.v_out_limit_v;
     if (!algo_pid_finite(v_limit) || v_limit <= 0.0f) {
-        v_limit = BUCKBOOST_POWER_PID_OUT_MAX;
+        v_limit = BUCKBOOST_POWER_PID_OUT_V_MAX;
     }
     vout_target_cmd = clampf(vout_target_cmd, -v_limit, v_limit);
 
     ctrl->state.power_pid_out = vout_target_cmd;
 
-    /* CW 模式级联: 功率环输出 → signed v_out_target_v → 电压环 → signed current_ref */
+    /* CW 模式级联: 功率环输出 v_cap_target_v → CV_CC 竞争环 → current_ref → 电流内环 */
     if (ctrl->state.target_type == BUCKBOOST_TARGET_CW) {
-        ctrl->state.v_out_target_v = vout_target_cmd;
+        ctrl->state.v_cap_target_v = vout_target_cmd;
     }
 }
 
@@ -675,20 +784,26 @@ void ctrl_buckboost_update_power(ctrl_buckboost_t* ctrl, float p_in) {
  * 参数配置
  * ============================================================================ */
 
-void ctrl_buckboost_set_vout_target(ctrl_buckboost_t* ctrl, float target_v) {
+void ctrl_buckboost_set_vcap_target(ctrl_buckboost_t* ctrl, float target_v) {
     if (ctrl != NULL)
-        ctrl->state.v_out_target_v = target_v;
+        ctrl->state.v_cap_target_v = target_v;
 }
 
 void ctrl_buckboost_enter_cv_mode(ctrl_buckboost_t* ctrl, float target_v) {
     if (ctrl == NULL || !algo_pid_finite(target_v) || target_v <= 0.0f)
         return;
-    ctrl->state.v_out_target_v = target_v;
+    ctrl->state.v_cap_target_v = target_v;
     ctrl->state.target_type = BUCKBOOST_TARGET_CV;
     if (ctrl->state.voltage_pid.reset) {
         ctrl->state.voltage_pid.reset(&ctrl->state.voltage_pid);
     }
     ctrl->state.voltage_pid_out = 0.0f;
+}
+
+void ctrl_buckboost_enter_cv_cc_mode(ctrl_buckboost_t* ctrl) {
+    if (ctrl == NULL)
+        return;
+    ctrl->state.target_type = BUCKBOOST_TARGET_CV_CC;
 }
 
 void ctrl_buckboost_enter_cw_mode(ctrl_buckboost_t* ctrl, float target_w) {
@@ -699,7 +814,7 @@ void ctrl_buckboost_enter_cw_mode(ctrl_buckboost_t* ctrl, float target_w) {
     ctrl->state.target_type = BUCKBOOST_TARGET_CW;
     float i_cap_limit = absf_fast(ctrl->state.i_cap_target_a);
     if (!algo_pid_finite(i_cap_limit) || i_cap_limit <= 0.0f) {
-        i_cap_limit = BUCKBOOST_I_CAP_TARGET_DEFAULT;
+        i_cap_limit = BUCKBOOST_CC_ICAP_SETPOINT_A_DEFAULT;
     }
     ctrl->state.i_cap_target_a = (target_w < 0.0f) ? -i_cap_limit : i_cap_limit;
 }
@@ -718,7 +833,7 @@ void ctrl_buckboost_set_il_target(ctrl_buckboost_t* ctrl, float target_a) {
     }
     float i_l_limit = absf_fast(ctrl->params.i_l_limit_a);
     if (!algo_pid_finite(i_l_limit) || i_l_limit <= 0.0f) {
-        i_l_limit = BUCKBOOST_I_L_LIMIT_DEFAULT;
+        i_l_limit = BUCKBOOST_I_L_LIMIT_A_DEFAULT;
     }
     /* 不 reset 内环 PID：级联时外环周期更新 ref，reset 会破坏积分连续性 */
     ctrl->state.target_type = BUCKBOOST_TARGET_CC;
@@ -740,7 +855,7 @@ void ctrl_buckboost_set_ptarget(ctrl_buckboost_t* ctrl, float target_w) {
     if (ctrl->state.target_type == BUCKBOOST_TARGET_CW) {
         float i_cap_limit = absf_fast(ctrl->state.i_cap_target_a);
         if (!algo_pid_finite(i_cap_limit) || i_cap_limit <= 0.0f) {
-            i_cap_limit = BUCKBOOST_I_CAP_TARGET_DEFAULT;
+            i_cap_limit = BUCKBOOST_CC_ICAP_SETPOINT_A_DEFAULT;
         }
         ctrl->state.i_cap_target_a = (target_w < 0.0f) ? -i_cap_limit : i_cap_limit;
     }
@@ -767,7 +882,7 @@ void ctrl_buckboost_set_params(ctrl_buckboost_t* ctrl, const ctrl_buckboost_para
             params->voltage_pid.kd);
         float i_limit = (algo_pid_finite(params->i_l_limit_a) && params->i_l_limit_a > 0.0f)
                           ? params->i_l_limit_a
-                          : BUCKBOOST_I_L_LIMIT_DEFAULT;
+                          : BUCKBOOST_I_L_LIMIT_A_DEFAULT;
         ctrl->state.voltage_pid._out_min = -i_limit;
         ctrl->state.voltage_pid._out_max = i_limit;
         ctrl->state.voltage_pid._integral_min = -i_limit;
@@ -779,10 +894,10 @@ void ctrl_buckboost_set_params(ctrl_buckboost_t* ctrl, const ctrl_buckboost_para
             params->power_pid.kd);
         float v_limit = (algo_pid_finite(params->v_out_limit_v) && params->v_out_limit_v > 0.0f)
                           ? params->v_out_limit_v
-                          : BUCKBOOST_V_OUT_LIMIT_DEFAULT;
-        ctrl->state.power_pid._out_min = BUCKBOOST_POWER_PID_OUT_MIN;
+                          : BUCKBOOST_VCAP_OVP_THRESHOLD_V;
+        ctrl->state.power_pid._out_min = BUCKBOOST_POWER_PID_OUT_V_MIN;
         ctrl->state.power_pid._out_max = v_limit;
-        ctrl->state.power_pid._integral_min = BUCKBOOST_POWER_PID_OUT_MIN;
+        ctrl->state.power_pid._integral_min = BUCKBOOST_POWER_PID_OUT_V_MIN;
         ctrl->state.power_pid._integral_max = v_limit;
     }
     if (algo_pid_finite(params->p_target_w)) {

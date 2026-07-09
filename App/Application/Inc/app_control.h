@@ -26,11 +26,12 @@ typedef enum {
 } sys_state_t;
 
 typedef enum {
-    MODE_IDLE       = 0,
-    MODE_BUCK_CV    = 1,
-    MODE_BUCK_CC    = 2,
-    MODE_STANDBY    = 3,
-    MODE_BUCK_CW    = 4,
+    MODE_IDLE    = 0,
+    MODE_CV      = 1,
+    MODE_CC      = 2,
+    MODE_STANDBY = 3,
+    MODE_CW      = 4,
+    MODE_CV_CC   = 5,
 } op_mode_t;
 
 typedef struct {
@@ -58,9 +59,14 @@ typedef struct {
         float buckboost_b;
     } duty;
     struct {
-        float i_cap_est_a;  /* cap 侧充电/放电电流估算，来自 I_L 与占空比 */
-        float i_in_a;       /* ADC 实测 I_IN，经滤波后用于 CW 环 */
-        float p_in_w;       /* VOUT(filtered) × I_IN(filtered)，VIN 当前未采样 */
+        float i_cap_est_a;    /* cap 侧充电/放电电流估算，来自 I_L 与占空比 */
+        float i_cap_target_a; /* CC 环 cap 侧目标电流 */
+        float cc_pid_out;     /* CC PID 输出，CC 模式下即 current_ref */
+        float voltage_pid_out; /* CV 电压环 PID 输出，CV 模式下即 current_ref */
+        float v_cap_target_v;  /* CV 电压环设定值（VCAP 目标） */
+        float current_ref_a;  /* 内环电流参考，外环赋值后的最终值 */
+        float i_in_a;         /* ADC 实测 I_IN，经滤波后用于 CW 环 */
+        float p_in_w;         /* VOUT(filtered) × I_IN(filtered)，VIN 当前未采样 */
         float p_target_w;
         float power_pid_out;
     } ff;
@@ -74,7 +80,7 @@ void app_control_tick(void);
 
 sys_state_t app_control_get_state(void);
 op_mode_t   app_control_get_mode(void);
-int         app_control_set_mode(op_mode_t mode);
+int         app_control_set_mode(op_mode_t mode, float vout, float vcap);
 
 int  app_control_power_enable(void);
 void app_control_power_disable(void);

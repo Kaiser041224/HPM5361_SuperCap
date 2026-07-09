@@ -109,9 +109,10 @@ static void buckboost_voltage_loop_isr(void) {
     g_ctrl_diag.filt.vout_v = vout_fb;
 
     float vcap_monitor = app_analog_signal_ma_step(ADC_CH_VCAP, g_ctrl_diag.filt.vcap_fast_v);
-    if (ctrl_finite(vcap_monitor)) {
-        g_ctrl_diag.filt.vcap_v = vcap_monitor;
+    if (!ctrl_finite(vcap_monitor)) {
+        goto exit;
     }
+    g_ctrl_diag.filt.vcap_v = vcap_monitor;
 
     float i_l = g_ctrl_diag.filt.i_l_a;
     float g = g_buckboost.state.generalized_duty;
@@ -123,7 +124,13 @@ static void buckboost_voltage_loop_isr(void) {
     }
     g_ctrl_diag.ff.i_cap_est_a = i_cap_est;
 
-    ctrl_buckboost_update_voltage(&g_buckboost, vout_fb, i_cap_est, i_cap_est);
+    ctrl_buckboost_update_voltage(&g_buckboost, vcap_monitor, i_cap_est, i_cap_est);
+
+    g_ctrl_diag.ff.i_cap_target_a  = g_buckboost.state.i_cap_target_a;
+    g_ctrl_diag.ff.cc_pid_out       = g_buckboost.state.cc_pid_out;
+    g_ctrl_diag.ff.voltage_pid_out  = g_buckboost.state.voltage_pid_out;
+    g_ctrl_diag.ff.v_cap_target_v   = g_buckboost.state.v_cap_target_v;
+    g_ctrl_diag.ff.current_ref_a    = ctrl_buckboost_get_current_ref(&g_buckboost);
 
 exit:;
 }
@@ -184,11 +191,16 @@ static sys_state_t s_state = SYS_INIT;
 static op_mode_t s_mode = MODE_IDLE;
 static bool s_self_test_ok;
 
-static void configure_controllers_for_mode(void) {
+static void configure_controllers_for_mode(float vout, float vcap) {
+    ctrl_buckboost_soft_start(&g_buckboost, vout, vcap);
+
     switch (s_mode) {
-    case MODE_BUCK_CV: ctrl_buckboost_set_target_type(&g_buckboost, BUCKBOOST_TARGET_CV); break;
-    case MODE_BUCK_CC: ctrl_buckboost_set_target_type(&g_buckboost, BUCKBOOST_TARGET_CC); break;
-    case MODE_BUCK_CW:
+    case MODE_CV:
+        ctrl_buckboost_enter_cv_mode(&g_buckboost, g_buckboost.state.v_cap_target_v);
+        break;
+    case MODE_CC: ctrl_buckboost_set_target_type(&g_buckboost, BUCKBOOST_TARGET_CC); break;
+    case MODE_CV_CC: ctrl_buckboost_enter_cv_cc_mode(&g_buckboost); break;
+    case MODE_CW:
         ctrl_buckboost_enter_cw_mode(&g_buckboost, BUCKBOOST_P_TARGET_DEFAULT);
         break;
     default: break;
@@ -201,20 +213,34 @@ void app_control_init(void) {
     ctrl_fault_init(NULL);
     ctrl_buckboost_init(&g_buckboost);
     ctrl_buckboost_enable(&g_buckboost);
-    ctrl_buckboost_enter_cw_mode(&g_buckboost, BUCKBOOST_P_TARGET_DEFAULT);
 
+    s_state = SYS_INIT;
+    s_self_test_ok = false;
+
+    /*
+     * 竞态防护：先完成全部控制器静态配置 (soft_start + set_mode)，
+     * 再注册 ISR 回调、启动 GPTMR。否则 PWM 计数器已在运行 (app_hrpwm_start_counter_only)，
+     * 回调一旦注册，下一个 200kHz PMT 中断就会用未初始化的 current_ref/target_type/PID
+     * 计算并写入占空比，污染 soft_start 的稳态初值。
+     *
+     * PWM 计数器已预启动，PMT 缓存此刻已有有效 VOUT/VCAP。
+     */
+    float vout_init = 0.0f;
+    float vcap_init = 0.0f;
+    uint16_t raw_vout_init = 0;
+    uint16_t raw_vcap_init = 0;
+    (void)app_adc_get_pmt_raw(ADC_CH_VOUT, &raw_vout_init);
+    (void)app_adc_get_pmt_raw(ADC_CH_VCAP, &raw_vcap_init);
+    app_analog_signal_convert_raw(ADC_CH_VOUT, raw_vout_init, &vout_init);
+    app_analog_signal_convert_raw(ADC_CH_VCAP, raw_vcap_init, &vcap_init);
+    (void)app_control_set_mode(MODE_CW, vout_init, vcap_init);
+
+    /* 控制器已就绪，此刻才挂载 ISR 回调并启动定时器，保证中断进入时状态一致 */
     app_gptmr_init();
     app_gptmr_register_callback(APP_GPTMR_CH_VOLTAGE, buckboost_voltage_loop_isr);
     app_gptmr_register_callback(APP_GPTMR_CH_POWER, buckboost_power_loop_isr);
-
     app_adc_register_pmt_callback(APP_ADC_INST_0, buckboost_current_loop_isr);
-
     app_gptmr_start_all();
-
-    s_state = SYS_INIT;
-    s_mode = MODE_BUCK_CW;
-    configure_controllers_for_mode();
-    s_self_test_ok = false;
 }
 
 void app_control_tick(void) {
@@ -242,7 +268,7 @@ void app_control_tick(void) {
 sys_state_t app_control_get_state(void) { return s_state; }
 op_mode_t app_control_get_mode(void) { return s_mode; }
 
-int app_control_set_mode(op_mode_t mode) {
+int app_control_set_mode(op_mode_t mode, float vout, float vcap) {
     switch (mode) {
     case MODE_IDLE:
     case MODE_STANDBY:
@@ -250,10 +276,11 @@ int app_control_set_mode(op_mode_t mode) {
             return -1;
         }
         break;
-    case MODE_BUCK_CV:
-    case MODE_BUCK_CC:
-    case MODE_BUCK_CW:
-        if (s_state != SYS_IDLE && s_state != SYS_RUN) {
+    case MODE_CV:
+    case MODE_CC:
+    case MODE_CV_CC:
+    case MODE_CW:
+        if (s_state != SYS_INIT && s_state != SYS_IDLE && s_state != SYS_RUN) {
             return -1;
         }
         break;
@@ -261,7 +288,7 @@ int app_control_set_mode(op_mode_t mode) {
     }
 
     s_mode = mode;
-    configure_controllers_for_mode();
+    configure_controllers_for_mode(vout, vcap);
     return 0;
 }
 

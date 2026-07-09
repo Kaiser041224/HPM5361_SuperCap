@@ -23,7 +23,7 @@
 #define APP_ANALOG_SIGNAL_BIDIR_BIAS_MV (INTF_ADC_DEFAULT_VREF_MV * 0.5f)
 
 #define APP_ANALOG_SIGNAL_FILTER_MA_MAX_WINDOW (8U)
-#define I_IN_FIX_A                             (0.0125f) /* IIN 偏置修正 */
+#define I_IN_FIX_A                             (0.1f) /* IIN 偏置修正 */
 typedef enum {
     APP_ANALOG_SIGNAL_FILTER_MA = 0,
     APP_ANALOG_SIGNAL_FILTER_LPF,
@@ -92,14 +92,12 @@ static const app_adc_calibration_t s_default_calibration[ADC_CH_COUNT] = {
 static const app_analog_signal_filter_cfg_t s_default_filter_cfg[ADC_CH_COUNT] = {
     [ADC_CH_VCAP] =
         {.type = APP_ANALOG_SIGNAL_FILTER_LPF,
-                       .cfg.lpf = {.cutoff_hz = 40000.0f, .sample_rate_hz = 200000.0f}    },
-    [ADC_CH_VOUT] = { .type = APP_ANALOG_SIGNAL_FILTER_MA, .cfg.ma = {.window_size = 4U}},
-    [ADC_CH_I_IN] =
-        {.type = APP_ANALOG_SIGNAL_FILTER_LPF,
-                       .cfg.lpf = {.cutoff_hz = 10000.0f, .sample_rate_hz = 25000.0f}     },
+                       .cfg.lpf = {.cutoff_hz = 40000.0f, .sample_rate_hz = 200000.0f}     },
+    [ADC_CH_VOUT] = { .type = APP_ANALOG_SIGNAL_FILTER_MA,  .cfg.ma = {.window_size = 4U}},
+    [ADC_CH_I_IN] = { .type = APP_ANALOG_SIGNAL_FILTER_MA, .cfg.ma = {.window_size = 16U}},
     [ADC_CH_I_L] =
         {.type = APP_ANALOG_SIGNAL_FILTER_LPF,
-                       .cfg.lpf = {.cutoff_hz = 20000.0f, .sample_rate_hz = 200000.0f}    },
+                       .cfg.lpf = {.cutoff_hz = 20000.0f, .sample_rate_hz = 200000.0f}     },
 };
 
 ATTR_PLACE_AT_FAST_RAM_BSS algo_ma_t s_ma_filters[APP_ANALOG_SIGNAL_ITEM_COUNT];

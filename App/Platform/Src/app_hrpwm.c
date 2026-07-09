@@ -133,6 +133,11 @@ void app_hrpwm_start_all(void)
     }
 }
 
+void app_hrpwm_start_counter_only(void)
+{
+    (void)intf_hrpwm_start_counter_only((intf_hrpwm_inst_t)HRPWM_INST_BUCKBOOST);
+}
+
 ATTR_RAMFUNC
 void app_hrpwm_force_low(hrpwm_pair_t pair)
 {

@@ -97,6 +97,13 @@ int intf_hrpwm_stop(intf_hrpwm_ch_t ch)
     return -1;
 }
 
+int intf_hrpwm_start_counter_only(intf_hrpwm_inst_t inst)
+{
+    if (inst >= HRPWM_INSTANCE_COUNT || hrpwm_ops[inst] == NULL) return -1;
+    if (hrpwm_ops[inst]->start_counter_only) return hrpwm_ops[inst]->start_counter_only();
+    return -1;
+}
+
 ATTR_RAMFUNC
 int intf_hrpwm_force_low(intf_hrpwm_ch_t ch)
 {

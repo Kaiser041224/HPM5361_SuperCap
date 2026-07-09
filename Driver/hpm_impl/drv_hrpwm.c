@@ -839,6 +839,21 @@ static int hrpwm_start(intf_hrpwm_ch_t ch) {
     return 0;
 }
 
+/* 仅启动计数器 (CEN)，不使能任何通道的物理输出。CEN 置位对 pwm_x->GCR 幂等，
+ * 后续 hrpwm_start() 补充使能输出时无需关心是否已启动过计数器。 */
+static int hrpwm_start_counter_only_impl(uint8_t inst) {
+    PWM_Type* base = hrpwm_get_base(inst);
+    if (base == NULL) {
+        return -1;
+    }
+    pwm_start_counter(base);
+    pwm_issue_shadow_register_lock_event(base);
+    return 0;
+}
+
+static int hrpwm_start_counter_only_pwm0(void) { return hrpwm_start_counter_only_impl(0); }
+static int hrpwm_start_counter_only_pwm1(void) { return hrpwm_start_counter_only_impl(1); }
+
 static int hrpwm_stop(intf_hrpwm_ch_t ch) {
     const hrpwm_channel_map_t* map;
     PWM_Type* base;
@@ -1277,6 +1292,7 @@ static const intf_hrpwm_t hrpwm_ops_pwm0 = {
     .config_phase_limit = hrpwm_config_phase_limit,
     .config_trigger_cmp = hrpwm_config_trigger_cmp_pwm0,
     .set_trigger_cmp_position = hrpwm_set_trigger_cmp_position_pwm0,
+    .start_counter_only = hrpwm_start_counter_only_pwm0,
 };
 
 static const intf_hrpwm_t hrpwm_ops_pwm1 = {
@@ -1300,6 +1316,7 @@ static const intf_hrpwm_t hrpwm_ops_pwm1 = {
     .config_phase_limit = hrpwm_config_phase_limit,
     .config_trigger_cmp = hrpwm_config_trigger_cmp_pwm1,
     .set_trigger_cmp_position = hrpwm_set_trigger_cmp_position_pwm1,
+    .start_counter_only = hrpwm_start_counter_only_pwm1,
 };
 
 void hpm_hrpwm_driver_register(void) {

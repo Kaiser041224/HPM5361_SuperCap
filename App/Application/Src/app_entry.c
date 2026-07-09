@@ -13,6 +13,10 @@
 #include "board.h"
 #include "intf_clock.h"
 
+/* PMT 预热等待时间：计数器启动后需跳过驱动内部丢弃的前 8 帧，
+ * 并让 VCAP/VOUT 的模拟前级 LPF 稳定，1ms 足够覆盖两者余量 */
+#define APP_INIT_PMT_WARMUP_MS 1U
+
 void app_init(void) {
     board_init();
     intf_clock_init();
@@ -26,11 +30,13 @@ void app_init(void) {
     app_can_init();
     app_comm_init();
     //
-    app_hrpwm_init();         /* PWM configured, NOT started (quiet for ADC cal) */
-    app_adc_init();           /* ADC calibration + PMT setup in quiet environment */
-    app_analog_signal_init(); /* Load calibration params for raw → physical conversion */
-    app_control_init();       /* Register ISR callbacks + pre-stage duty=0 BEFORE PWM starts */
-    app_hrpwm_start_all();    /* PWM starts — ISR already armed, duty begins at 0 */
+    app_hrpwm_init();               /* PWM configured, NOT started */
+    app_adc_init();                 /* ADC calibration + PMT setup, trigger source still idle */
+    app_analog_signal_init();       /* Load calibration params for raw → physical conversion */
+    app_hrpwm_start_counter_only(); /* Counter runs, PMT starts sampling; A/B pins stay LOW */
+    intf_clock_delay_ms(APP_INIT_PMT_WARMUP_MS); /* Let PMT cache VOUT/VCAP settle */
+    app_control_init();             /* Register ISR + soft-start using PMT-sampled VOUT/VCAP */
+    app_hrpwm_start_all();          /* Enable A/B output — duty begins at soft-start value */
 }
 
 void app_run_once(void) {

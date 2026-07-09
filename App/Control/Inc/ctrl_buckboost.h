@@ -35,7 +35,7 @@
 #include <stdint.h>
 
 /* 控制默认值 */
-#define BUCKBOOST_P_TARGET_DEFAULT 15.0f
+#define BUCKBOOST_P_TARGET_DEFAULT 15.0f /* CW 模式功率目标默认值 (W) */
 
 #ifdef __cplusplus
 extern "C" {
@@ -54,6 +54,7 @@ typedef enum {
     BUCKBOOST_TARGET_CV = 0,
     BUCKBOOST_TARGET_CC = 1,
     BUCKBOOST_TARGET_CW = 2,
+    BUCKBOOST_TARGET_CV_CC = 3,          /* CV/CC 竞争：取更保守的 current_ref */
 } ctrl_buckboost_target_t;
 
 typedef struct {
@@ -73,7 +74,7 @@ typedef struct {
     bool enabled;
     ctrl_buckboost_target_t target_type;
 
-    float v_out_target_v;
+    float v_cap_target_v;
     float i_l_target_a;
     float i_cap_target_a;
     float p_target_w;
@@ -107,6 +108,21 @@ void ctrl_buckboost_disable(ctrl_buckboost_t* ctrl);
 void ctrl_buckboost_emergency_stop(ctrl_buckboost_t* ctrl);
 
 /*
+ * 软启动 (Soft Start)
+ *   根据当前 VOUT 和 VCAP 实测值，反推稳态 generalized_duty，
+ *   初始化 PID 积分器和状态量，避免模式切换时的电流冲击。
+ *
+ *   调用时机：
+ *     - ctrl_buckboost_init() 后，首次启动前
+ *     - 模式切换前（例如 CV → CW）
+ *
+ *   原理：
+ *     稳态时 V_L = 0，推导得 g_ss = VCAP / (VOUT + VCAP)
+ *     以此为初值，current_ref = 0，各 PID 积分器置零
+ */
+void ctrl_buckboost_soft_start(ctrl_buckboost_t* ctrl, float vout, float vcap);
+
+/*
  * 单输入调制器: generalized_duty (0.0-1.0) → DA, DB
  *
  *   DA = Dmax × generalized_duty
@@ -128,11 +144,13 @@ void ctrl_buckboost_update_current(ctrl_buckboost_t* ctrl, float i_l, float vout
 
 /*
  * 电压/限流竞争外环 update (50kHz)
- *   PI(v_out_target, vout) + i_cap_ff × ff_gain → current_ref
+ *   PI(v_cap_target, vcap) + i_cap_ff × ff_gain → current_ref
  *   PI(i_cap_target, i_cap_est) 与电压环竞争，限制 cap 侧充电/放电电流。
  *
- * 电压反馈使用 VOUT；cap 侧电流当前由 I_L 和占空比估算。
+ * 电压反馈使用 VCAP；cap 侧电流当前由 I_L 和占空比估算。
  */
+void ctrl_buckboost_update_voltage(
+    ctrl_buckboost_t* ctrl, float vcap, float i_cap_ff, float i_cap_est);
 void ctrl_buckboost_update_voltage(
     ctrl_buckboost_t* ctrl, float vout, float i_cap_ff, float i_cap_est);
 
@@ -144,20 +162,35 @@ void ctrl_buckboost_update_voltage(
 void ctrl_buckboost_enter_cv_mode(ctrl_buckboost_t* ctrl, float target_v);
 
 /*
+ * 进入 CV/CC 竞争模式
+ *   - 维持当前 v_cap_target_v 不变，不重置 PID（平滑切入）
+ *   - target_type 设为 BUCKBOOST_TARGET_CV_CC
+ */
+void ctrl_buckboost_enter_cv_cc_mode(ctrl_buckboost_t* ctrl);
+
+/*
  * 进入恒功率 (CW) 模式，支持双向 (target_w 可为正/负)
  *   - 设定 p_target_w, target_type 自动设为 BUCKBOOST_TARGET_CW
  *   - 不 reset PID, 保留积分连续性实现平滑模式切换
+ *   - CW 输出 v_cap_target_v 级联到 CV_CC 竞争环，实现功率平衡
  */
 void ctrl_buckboost_enter_cw_mode(ctrl_buckboost_t* ctrl, float target_w);
 
 /*
  * 功率外环 update (25kHz)
- *   增量式 PI(p_target, p_in) → power_pid_out
- *   双向: PID 输出作为 signed VOUT target，再由电压环产生 signed current_ref
+ *   增量式 PI(p_target, p_in) → v_cap_target_v
+ *
+ *   设计原理：通过动态调节 VCAP 目标电压实现功率平衡
+ *     - p_in > p_target → 降低 v_cap_target_v → CV 环驱动 VCAP 下降 → 放电（VCAP → VOUT）
+ *     - p_in < p_target → 抬高 v_cap_target_v → CV 环驱动 VCAP 上升 → 充电（VOUT → VCAP）
+ *
+ *   功率反馈：p_in = VOUT × IIN ≈ VIN × IIN（近似 VIN 端输入功率）
+ *
+ *   注意：当前 PID 参数（kp=0.025, ki=128）为初始值，未经实测整定
  */
 void ctrl_buckboost_update_power(ctrl_buckboost_t* ctrl, float p_in);
 
-void ctrl_buckboost_set_vout_target(ctrl_buckboost_t* ctrl, float target_v);
+void ctrl_buckboost_set_vcap_target(ctrl_buckboost_t* ctrl, float target_v);
 void ctrl_buckboost_set_il_target(ctrl_buckboost_t* ctrl, float target_a);
 void ctrl_buckboost_set_icap_target(ctrl_buckboost_t* ctrl, float target_a);
 void ctrl_buckboost_set_ptarget(ctrl_buckboost_t* ctrl, float target_w);

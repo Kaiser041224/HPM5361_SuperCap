@@ -105,6 +105,7 @@ typedef struct {
         int (*config_phase_limit)(const intf_hrpwm_phase_limit_t *limit);
         int (*config_trigger_cmp)(uint8_t cmp_index, float position_ratio);
         int (*set_trigger_cmp_position)(uint8_t cmp_index, float position_ratio);
+        int (*start_counter_only)(void);
     };
 } intf_hrpwm_t;
 
@@ -118,6 +119,14 @@ int intf_hrpwm_set_frequency(intf_hrpwm_inst_t inst, uint32_t frequency_hz);
 int intf_hrpwm_set_jitter(intf_hrpwm_ch_t ch, uint8_t jitter_cmp);
 int intf_hrpwm_start(intf_hrpwm_ch_t ch);
 int intf_hrpwm_stop(intf_hrpwm_ch_t ch);
+
+/*
+ * 仅启动 PWM 计数器 (CEN)，不使能物理输出引脚。
+ * 用于软启动前预热 ADC PMT 触发链 (CMP10/11 依赖计数器运行)，
+ * 引脚仍保持关闭，避免占空比未定前的输出冲击。
+ * 后续需调用 intf_hrpwm_start() 使能实际输出。
+ */
+int intf_hrpwm_start_counter_only(intf_hrpwm_inst_t inst);
 int intf_hrpwm_force_low(intf_hrpwm_ch_t ch);
 int intf_hrpwm_force_release(intf_hrpwm_ch_t ch);
 int intf_hrpwm_config_fault(intf_hrpwm_inst_t inst, const intf_hrpwm_fault_cfg_t *cfg);

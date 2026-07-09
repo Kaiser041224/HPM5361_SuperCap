@@ -45,7 +45,7 @@ LAST_BUILD_LOG := $(BUILD_DIR)/last_build.log
 # Usage: make build OPT_LEVEL_DBG=-Og OPT_LEVEL_REL=-Ofast
 # Debug:  -O0 (default, best debugging experience)
 # Release: -O3 (default, maximum speed)
-OPT_LEVEL_DBG ?= -Og
+OPT_LEVEL_DBG ?= -O3
 OPT_LEVEL_REL ?= -O3
 # Extra flags
 DBG_EXTRA_FLAGS ?= -g3 -gdwarf-4 -fno-omit-frame-pointer -fno-optimize-sibling-calls

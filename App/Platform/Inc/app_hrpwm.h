@@ -32,6 +32,13 @@ void app_hrpwm_start(hrpwm_pair_t pair);
 void app_hrpwm_stop(hrpwm_pair_t pair);
 void app_hrpwm_stop_all(void);
 void app_hrpwm_start_all(void);
+
+/*
+ * 仅启动 PWM1 计数器，不使能 A/B 半桥物理输出。
+ * 用于系统初始化阶段预热 ADC PMT 触发链，令 PMT 采集到有效 VOUT/VCAP，
+ * 供软启动 (soft start) 计算初始占空比，避免后续 app_hrpwm_start_all() 冲击。
+ */
+void app_hrpwm_start_counter_only(void);
 void app_hrpwm_force_low(hrpwm_pair_t pair);
 void app_hrpwm_force_release(hrpwm_pair_t pair);
 void app_hrpwm_emergency_stop(void);
